@@ -66,7 +66,7 @@ export function App() {
       <Leva collapsed={false} oneLineLabels />
       <Canvas
         gl={{ antialias: false, alpha: false, powerPreference: "high-performance" }}
-        camera={{ position: [0, 1.2, 9], fov: 38, near: 0.1, far: 200 }}
+        camera={{ position: [9, 1.2, 0], fov: 38, near: 0.1, far: 200 }}
         dpr={[1, 1.5]}
         onCreated={({ gl }) => {
           gl.setClearColor("#1a0810", 1);

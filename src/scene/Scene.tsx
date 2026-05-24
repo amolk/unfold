@@ -13,6 +13,7 @@ import {
   createExplorer,
   withFocus,
   getVisibleScene,
+  STUB_FROM_ID,
   type ExplorerState,
   type ExplorerNode,
   type ExplorerEdge,
@@ -67,7 +68,7 @@ export function Scene() {
         // eslint-disable-next-line no-console
         console.log("[unfold settings]\n" + json);
       }),
-      cameraEase: { value: 0.025, min: 0.005, max: 0.2, step: 0.005, label: "camera ease" },
+      cameraEase: { value: 0.005, min: 0.005, max: 0.2, step: 0.005, label: "camera ease" },
       fadeSpeed: { value: 2.0, min: 0.3, max: 10, step: 0.1, label: "fade speed" },
       sphereOpacity: {
         value: 0,
@@ -81,6 +82,10 @@ export function Scene() {
     })) as any;
 
   const [explorer, setExplorer] = useState<ExplorerState>(() => createExplorer({ seed }));
+  // CameraFollow fights OrbitControls panning by yanking the target back to
+  // the focus. Until the user has actually selected something, leave the
+  // camera entirely to them — first click arms the follower.
+  const [followArmed, setFollowArmed] = useState(false);
 
   const activeRef = useRef<{
     nodes: Map<string, NodeEntry>;
@@ -116,6 +121,7 @@ export function Scene() {
     activeRef.current.nodes.clear();
     activeRef.current.edges.clear();
     setActiveKey((k) => k + 1);
+    setFollowArmed(false);
   }, [seed]);
 
   // Sync active set against the explorer's current visible scene.
@@ -128,7 +134,25 @@ export function Scene() {
     for (const e of vis.pathEdges) visEdgeIds.add(e.id);
     for (const e of vis.candidateEdges) visEdgeIds.add(e.id);
 
-    let entriesAdded = false;
+    let topologyChanged = false;
+
+    // Prune entries that finished fading out during a previous transition.
+    // Doing this here (a sync triggered by user navigation) instead of in
+    // useFrame means the rebuild is paid at click time — when the user expects
+    // motion — rather than as a sudden particle re-shuffle at the moment a
+    // fade-out happens to finish.
+    for (const [id, entry] of activeRef.current.nodes) {
+      if (entry.target === 0 && entry.fade < 0.005) {
+        activeRef.current.nodes.delete(id);
+        topologyChanged = true;
+      }
+    }
+    for (const [id, entry] of activeRef.current.edges) {
+      if (entry.target === 0 && entry.fade < 0.005) {
+        activeRef.current.edges.delete(id);
+        topologyChanged = true;
+      }
+    }
 
     const upsertNode = (n: ExplorerNode) => {
       const existing = activeRef.current.nodes.get(n.id);
@@ -137,7 +161,7 @@ export function Scene() {
         existing.node = n;
       } else {
         activeRef.current.nodes.set(n.id, { node: n, target: 1, fade: 0, index: -1 });
-        entriesAdded = true;
+        topologyChanged = true;
       }
     };
     vis.pathNodes.forEach(upsertNode);
@@ -153,7 +177,7 @@ export function Scene() {
         existing.edge = e;
       } else {
         activeRef.current.edges.set(e.id, { edge: e, target: 1, fade: 0, index: -1 });
-        entriesAdded = true;
+        topologyChanged = true;
       }
     };
     vis.pathEdges.forEach(upsertEdge);
@@ -162,7 +186,7 @@ export function Scene() {
       if (!visEdgeIds.has(entry.edge.id)) entry.target = 0;
     }
 
-    if (entriesAdded) setActiveKey((k) => k + 1);
+    if (topologyChanged) setActiveKey((k) => k + 1);
   }, [explorer]);
 
   // Build the renderable timeline + fade buffers/attributes from the active
@@ -209,11 +233,16 @@ export function Scene() {
     const nodeFadeAttribute = new THREE.InstancedBufferAttribute(nodeFadeArray, 1);
     nodeFadeAttribute.setUsage(THREE.DynamicDrawUsage);
 
-    // Edge fade texture: 1×N RGBA float; R holds the fade.
+    // Edge fade texture: 1×N RGBA float.
+    //   R = current per-edge fade (mutated each frame).
+    //   G = entry-ramp flag (1 = particle alpha ramps in along the curve from
+    //       life=0 → life≈0.6, used by the root's incoming stub so its
+    //       upstream end dissolves into the background).
     const edgeCount = Math.max(1, edgeEntries.length);
     const edgeFadeArray = new Float32Array(edgeCount * 4);
     edgeEntries.forEach((e, i) => {
       edgeFadeArray[i * 4] = e.fade;
+      edgeFadeArray[i * 4 + 1] = e.edge.fromId === STUB_FROM_ID ? 1 : 0;
       edgeFadeArray[i * 4 + 3] = 1;
     });
     const edgeFadeTexture = new THREE.DataTexture(
@@ -244,48 +273,43 @@ export function Scene() {
   }, [activeKey, explorer.focusId]);
 
   // Drive the fade animation each frame. Animates entries toward their target
-  // and writes values into the typed arrays. When a leaving entry reaches ~0
-  // we drop it and bump activeKey so the timeline rebuilds without it.
-  const pendingRemoval = useRef(false);
+  // and writes values into the typed arrays.
+  //
+  // Faded-out entries (target=0, fade≈0) are intentionally NOT deleted here:
+  // dropping them would force a Built+geometry rebuild mid-flight, which
+  // visibly re-shuffles every particle's random phase and redistributes the
+  // per-edge particle share — a sharp pop at the moment the fade-out finishes.
+  // Instead they linger invisibly (fade is exponentially close to 0, drop
+  // threshold culls every particle) and the next sync (on the user's next
+  // click) prunes them, so the rebuild happens during a transition the user
+  // already expects to see motion in.
   useFrame((_, dt) => {
     const k = 1 - Math.exp(-dt * fadeSpeed);
-    let removed = false;
 
-    activeRef.current.nodes.forEach((entry, id) => {
+    activeRef.current.nodes.forEach((entry) => {
       entry.fade += (entry.target - entry.fade) * k;
       if (entry.index >= 0 && entry.index < built.nodeFadeArray.length) {
         built.nodeFadeArray[entry.index] = entry.fade;
       }
-      if (entry.target === 0 && entry.fade < 0.005) {
-        activeRef.current.nodes.delete(id);
-        removed = true;
-      }
     });
     built.nodeFadeAttribute.needsUpdate = true;
 
-    activeRef.current.edges.forEach((entry, id) => {
+    activeRef.current.edges.forEach((entry) => {
       entry.fade += (entry.target - entry.fade) * k;
       if (entry.index >= 0 && entry.index * 4 < built.edgeFadeArray.length) {
         built.edgeFadeArray[entry.index * 4] = entry.fade;
       }
-      if (entry.target === 0 && entry.fade < 0.005) {
-        activeRef.current.edges.delete(id);
-        removed = true;
-      }
     });
     built.edgeFadeTexture.needsUpdate = true;
 
-    if (removed && !pendingRemoval.current) {
-      pendingRemoval.current = true;
-      setActiveKey((k) => k + 1);
-    }
-
     // Repopulate the bulge arrays for the shader. We push position, fade, color
-    // and a 0/1 focus emphasis flag for each active node.
+    // and a 0/1 focus emphasis flag for each active node. Skip lingering dead
+    // entries so they don't consume one of the MAX_BULGE_NODES slots.
     const focusId = explorer.focusId;
     let bi = 0;
     for (const entry of activeRef.current.nodes.values()) {
       if (bi >= MAX_BULGE_NODES) break;
+      if (entry.fade < 0.005) continue;
       const p4 = bi * 4;
       const c = entry.node.kind === "crisis" ? crisisColor3 : stableColor3;
       nodeBulge.posFade[p4 + 0] = entry.node.position.x;
@@ -300,15 +324,13 @@ export function Scene() {
     }
     nodeBulge.count.value = bi;
   });
-  useEffect(() => {
-    pendingRemoval.current = false;
-  }, [activeKey]);
 
   const handleSelectNode = useCallback(
     (index: number) => {
       const id = built.nodeIds[index];
       if (!id) return;
       setExplorer((s) => withFocus(s, id));
+      setFollowArmed(true);
     },
     [built.nodeIds],
   );
@@ -329,7 +351,9 @@ export function Scene() {
         fadeAttribute={built.nodeFadeAttribute}
         sphereOpacity={sphereOpacity}
       />
-      {focusNode && <CameraFollow target={focusNode.position} lerp={cameraEase} />}
+      {followArmed && focusNode && (
+        <CameraFollow target={focusNode.position} lerp={cameraEase} />
+      )}
       <OrbitControls
         enablePan
         enableRotate
@@ -340,6 +364,11 @@ export function Scene() {
         panSpeed={0.8}
         minDistance={2}
         maxDistance={60}
+        // Tilt the lookat above the world origin so the root (at 0,0,0) lands
+        // ~20% from the bottom of the viewport on first paint, leaving room
+        // above it for branches to grow into. Camera position is unchanged
+        // (App sets it to (0, 1.2, 9)); only the target moves.
+        target={[0, 1.8, 0]}
         makeDefault
       />
     </>

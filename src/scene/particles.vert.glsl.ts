@@ -146,9 +146,17 @@ void main() {
   // aSeed; particles whose threshold exceeds the current fade are dropped.
   // This gives a gradual "thinning" of the branch as the fade animates from
   // 1 → 0 (or fills in 0 → 1) rather than a uniform dim.
-  float edgeFade = texture2D(uEdgeFades, vec2(0.5, (aCurveIndex + 0.5) / uCurveTexHeight)).r;
+  vec4 edgeFadeSample = texture2D(uEdgeFades, vec2(0.5, (aCurveIndex + 0.5) / uCurveTexHeight));
+  float edgeFade = edgeFadeSample.r;
+  float entryRamp = edgeFadeSample.g; // 1 on edges that should dissolve from life=0
   float dropThreshold = fract(aSeed * 0.13782 + 0.317);
   vAlpha *= step(dropThreshold, edgeFade);
+  // Ramp particle alpha from the dangling head of the curve into the
+  // destination node, so the stub edge fades into the background instead of
+  // ending abruptly in mid-space. Pow > 1 keeps the upstream end faint for
+  // longer before brightening toward the root.
+  float entryAlpha = pow(smoothstep(0.0, 1.0, life), 2.2);
+  vAlpha *= mix(1.0, entryAlpha, entryRamp);
 
   vKindMix = mix(aFromCrisis, aToCrisis, life);
 

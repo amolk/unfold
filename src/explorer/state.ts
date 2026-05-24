@@ -63,6 +63,12 @@ export interface CreateOptions {
   seed?: number;
 }
 
+/** Sentinel id for the synthetic upstream end of the root's stub edge. No
+ *  ExplorerNode exists with this id — the stub edge only contributes a Bezier
+ *  curve for particles to flow along, so the root has visible incoming flow
+ *  before it's expanded. */
+export const STUB_FROM_ID = "__stub__";
+
 export function createExplorer({ seed = 7 }: CreateOptions = {}): ExplorerState {
   const root: ExplorerNode = {
     id: "0",
@@ -72,9 +78,25 @@ export function createExplorer({ seed = 7 }: CreateOptions = {}): ExplorerState 
     childIds: null,
     depth: 0,
   };
+  // Stub edge flowing into the root from -x. Without it the initial scene has
+  // no edges, so no particles render and the (invisible) root sphere has no
+  // bulge to mark its position.
+  const stubEdge: ExplorerEdge = {
+    id: `${STUB_FROM_ID}->${root.id}`,
+    fromId: STUB_FROM_ID,
+    toId: root.id,
+    controls: [
+      new THREE.Vector3(0.0, -1.5, 0),
+      new THREE.Vector3(0.08, -1.0, 0.03),
+      new THREE.Vector3(0.03, -0.45, -0.03),
+      root.position.clone(),
+    ],
+    fromKind: "stable",
+    toKind: root.kind,
+  };
   const state: ExplorerState = {
     nodes: new Map([[root.id, root]]),
-    edges: new Map(),
+    edges: new Map([[stubEdge.id, stubEdge]]),
     rootId: root.id,
     focusId: root.id,
     rootSeed: seed,
@@ -108,11 +130,13 @@ function ensureChildren(state: ExplorerState, nodeId: string) {
   const count = 2 + Math.floor(rng() * 3);
 
   // Direction the parent "arrived from" — children fan forward from that.
+  // For the root we fall back to +y so children fan upward, matching the
+  // stub edge that arrives from below.
   const parent = node.parentId ? state.nodes.get(node.parentId) : null;
   const incoming =
     parent && node.position.distanceToSquared(parent.position) > 1e-6
       ? node.position.clone().sub(parent.position).normalize()
-      : new THREE.Vector3(1, 0, 0);
+      : new THREE.Vector3(0, 1, 0);
 
   // Build an orthonormal frame around the incoming direction.
   const refUp =
@@ -211,6 +235,10 @@ export function getVisibleScene(state: ExplorerState): VisibleScene {
   const pathNodes = getPath(state);
   const candidateNodes = getCandidates(state);
   const pathEdges: ExplorerEdge[] = [];
+  // Synthetic stub flowing into the root — always visible so root has a
+  // particle bulge even before it's expanded.
+  const stub = state.edges.get(`${STUB_FROM_ID}->${state.rootId}`);
+  if (stub) pathEdges.push(stub);
   for (let i = 1; i < pathNodes.length; i++) {
     const e = state.edges.get(`${pathNodes[i - 1].id}->${pathNodes[i].id}`);
     if (e) pathEdges.push(e);
