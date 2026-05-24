@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OrbitControls } from "@react-three/drei";
-import { useControls, button } from "leva";
+import { useControls, button, levaStore } from "leva";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { ParticleField } from "./ParticleField";
+import { ParticleField, type NodeBulgeData } from "./ParticleField";
 import { Nodes } from "./Nodes";
+
+// Must match the shader's MAX_NODES.
+const MAX_BULGE_NODES = 32;
 import { CameraFollow } from "./CameraFollow";
 import {
   createExplorer,
@@ -44,12 +47,38 @@ interface Built {
 }
 
 export function Scene() {
-  const [{ seed, cameraEase, fadeSpeed }, set] = useControls("Explorer", () => ({
-    seed: { value: 7, min: 1, max: 9999, step: 1 },
-    regenerate: button(() => set({ seed: Math.floor(Math.random() * 9999) })),
-    cameraEase: { value: 0.025, min: 0.005, max: 0.2, step: 0.005, label: "camera ease" },
-    fadeSpeed: { value: 2.0, min: 0.3, max: 10, step: 0.1, label: "fade speed" },
-  })) as any;
+  const [{ seed, cameraEase, fadeSpeed, sphereOpacity, stableNodeColor, crisisNodeColor }, set] =
+    useControls("Explorer", () => ({
+      seed: { value: 7, min: 1, max: 9999, step: 1 },
+      regenerate: button(() => set({ seed: Math.floor(Math.random() * 9999) })),
+      "copy settings": button(() => {
+        // Dump every current value across all folders to clipboard as JSON.
+        // Paste it back into chat to have me apply the changes as new defaults.
+        const data = levaStore.getData() as Record<string, any>;
+        const flat: Record<string, unknown> = {};
+        for (const [key, entry] of Object.entries(data)) {
+          if (entry && "value" in entry && typeof entry.value !== "function") {
+            flat[key] = entry.value;
+          }
+        }
+        const json = JSON.stringify(flat, null, 2);
+        navigator.clipboard?.writeText(json).catch(() => {});
+        // Also log so the user has a fallback if clipboard write fails.
+        // eslint-disable-next-line no-console
+        console.log("[unfold settings]\n" + json);
+      }),
+      cameraEase: { value: 0.025, min: 0.005, max: 0.2, step: 0.005, label: "camera ease" },
+      fadeSpeed: { value: 2.0, min: 0.3, max: 10, step: 0.1, label: "fade speed" },
+      sphereOpacity: {
+        value: 0,
+        min: 0,
+        max: 1,
+        step: 0.01,
+        label: "show spheres",
+      },
+      stableNodeColor: { value: "#a8c8b3", label: "node stable" },
+      crisisNodeColor: { value: "#e0a050", label: "node crisis" },
+    })) as any;
 
   const [explorer, setExplorer] = useState<ExplorerState>(() => createExplorer({ seed }));
 
@@ -57,6 +86,24 @@ export function Scene() {
     nodes: Map<string, NodeEntry>;
     edges: Map<string, EdgeEntry>;
   }>({ nodes: new Map(), edges: new Map() });
+
+  // Node-bulge data: stable references repopulated each frame from the active
+  // set. Same instance for the entire component lifetime so the GPU just sees
+  // the latest values without rebinding.
+  const nodeBulge = useMemo<NodeBulgeData>(
+    () => ({
+      posFade: new Float32Array(MAX_BULGE_NODES * 4),
+      colorEmph: new Float32Array(MAX_BULGE_NODES * 4),
+      count: { value: 0 },
+    }),
+    [],
+  );
+  const stableColor3 = useMemo(() => new THREE.Color(), []);
+  const crisisColor3 = useMemo(() => new THREE.Color(), []);
+  useEffect(() => {
+    stableColor3.set(stableNodeColor);
+    crisisColor3.set(crisisNodeColor);
+  }, [stableColor3, crisisColor3, stableNodeColor, crisisNodeColor]);
 
   // Bumped when active entries are added or removed, so the timeline + fade
   // buffers are rebuilt. NOT bumped on every fade-value tick — those are
@@ -232,6 +279,26 @@ export function Scene() {
       pendingRemoval.current = true;
       setActiveKey((k) => k + 1);
     }
+
+    // Repopulate the bulge arrays for the shader. We push position, fade, color
+    // and a 0/1 focus emphasis flag for each active node.
+    const focusId = explorer.focusId;
+    let bi = 0;
+    for (const entry of activeRef.current.nodes.values()) {
+      if (bi >= MAX_BULGE_NODES) break;
+      const p4 = bi * 4;
+      const c = entry.node.kind === "crisis" ? crisisColor3 : stableColor3;
+      nodeBulge.posFade[p4 + 0] = entry.node.position.x;
+      nodeBulge.posFade[p4 + 1] = entry.node.position.y;
+      nodeBulge.posFade[p4 + 2] = entry.node.position.z;
+      nodeBulge.posFade[p4 + 3] = entry.fade;
+      nodeBulge.colorEmph[p4 + 0] = c.r;
+      nodeBulge.colorEmph[p4 + 1] = c.g;
+      nodeBulge.colorEmph[p4 + 2] = c.b;
+      nodeBulge.colorEmph[p4 + 3] = entry.node.id === focusId ? 1 : 0;
+      bi++;
+    }
+    nodeBulge.count.value = bi;
   });
   useEffect(() => {
     pendingRemoval.current = false;
@@ -250,18 +317,24 @@ export function Scene() {
 
   return (
     <>
-      <ParticleField timeline={built.timeline} edgeFadeTexture={built.edgeFadeTexture} />
+      <ParticleField
+        timeline={built.timeline}
+        edgeFadeTexture={built.edgeFadeTexture}
+        nodeBulge={nodeBulge}
+      />
       <Nodes
         timeline={built.timeline}
         focusedIndex={built.focusIndex}
         onSelectNode={handleSelectNode}
         fadeAttribute={built.nodeFadeAttribute}
+        sphereOpacity={sphereOpacity}
       />
       {focusNode && <CameraFollow target={focusNode.position} lerp={cameraEase} />}
       <OrbitControls
         enablePan
         enableRotate
         enableZoom
+        zoomToCursor
         zoomSpeed={0.8}
         rotateSpeed={0.7}
         panSpeed={0.8}

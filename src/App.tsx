@@ -43,8 +43,8 @@ class Boundary extends React.Component<
 
 function BloomFx() {
   const { intensity, threshold, smoothing } = useControls("Bloom", {
-    intensity: { value: 0.6, min: 0, max: 4, step: 0.05 },
-    threshold: { value: 0.15, min: 0, max: 1, step: 0.01 },
+    intensity: { value: 0.05, min: 0, max: 4, step: 0.05 },
+    threshold: { value: 0.13, min: 0, max: 1, step: 0.01 },
     smoothing: { value: 0.85, min: 0, max: 1, step: 0.01 },
   });
   return (
@@ -69,11 +69,11 @@ export function App() {
         camera={{ position: [0, 1.2, 9], fov: 38, near: 0.1, far: 200 }}
         dpr={[1, 1.5]}
         onCreated={({ gl }) => {
-          gl.setClearColor("#05060a", 1);
+          gl.setClearColor("#1a0810", 1);
         }}
       >
-        <color attach="background" args={["#05060a"]} />
-        <fog attach="fog" args={["#05060a", 12, 32]} />
+        <color attach="background" args={["#1a0810"]} />
+        <fog attach="fog" args={["#1a0810", 10, 40]} />
         <Scene />
         <BloomFx />
       </Canvas>

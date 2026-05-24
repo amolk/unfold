@@ -11,6 +11,7 @@ uniform float uRimStrength;
 uniform float uHotBoost;       // extra HDR brightness for the hot color
 uniform vec3  uHotTint;        // a bit warmer than the base instance color
 uniform vec3  uDarkTint;       // sunspot color
+uniform float uOpacity;        // 0 = invisible (still raycast), 1 = full sun
 
 varying vec3 vWorldPos;
 varying vec3 vNormal;
@@ -70,6 +71,6 @@ void main() {
   vec3 rimColor = mix(vec3(0.85, 1.0, 1.4), vec3(1.5, 0.9, 0.4), vKind);
   surface += rimColor * rim * uRimStrength * (1.0 + 2.0 * vEmphasis);
 
-  gl_FragColor = vec4(surface, 1.0);
+  gl_FragColor = vec4(surface * uOpacity, uOpacity);
 }
 `;

@@ -13,6 +13,8 @@ interface NodesProps {
   /** Per-instance fade in [0,1]; backing array is mutated by the owner each
    *  frame, we just (re)bind it and set needsUpdate. */
   fadeAttribute: THREE.InstancedBufferAttribute;
+  /** 0 = invisible (still raycastable for clicks), 1 = full sun-surface look. */
+  sphereOpacity: number;
 }
 
 export function Nodes({
@@ -20,6 +22,7 @@ export function Nodes({
   focusedIndex = -1,
   onSelectNode,
   fadeAttribute,
+  sphereOpacity,
 }: NodesProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null!);
   const materialRef = useRef<THREE.ShaderMaterial>(null!);
@@ -140,6 +143,7 @@ export function Nodes({
       uHotBoost: { value: hotBoost },
       uHotTint: { value: new THREE.Color(1.0, 0.9, 0.75) },
       uDarkTint: { value: new THREE.Color(0.25, 0.18, 0.15) },
+      uOpacity: { value: 1 },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -152,7 +156,8 @@ export function Nodes({
     u.uPlasmaSpeed.value = plasmaSpeed;
     u.uRimStrength.value = rimStrength;
     u.uHotBoost.value = hotBoost;
-  }, [plasmaScale, plasmaSpeed, rimStrength, hotBoost]);
+    u.uOpacity.value = sphereOpacity;
+  }, [plasmaScale, plasmaSpeed, rimStrength, hotBoost, sphereOpacity]);
 
   useFrame((_, dt) => {
     if (materialRef.current) {
@@ -190,8 +195,8 @@ export function Nodes({
         uniforms={uniforms}
         vertexShader={nodesVert}
         fragmentShader={nodesFrag}
-        transparent={false}
-        depthWrite
+        transparent
+        depthWrite={sphereOpacity > 0.01}
         depthTest
       />
     </instancedMesh>

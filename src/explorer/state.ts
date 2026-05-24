@@ -79,7 +79,8 @@ export function createExplorer({ seed = 7 }: CreateOptions = {}): ExplorerState 
     focusId: root.id,
     rootSeed: seed,
   };
-  ensureChildren(state, root.id);
+  // Don't auto-expand the root — start with just the root + its incoming
+  // stream. The user expands it by clicking.
   return state;
 }
 
@@ -88,8 +89,13 @@ export function createExplorer({ seed = 7 }: CreateOptions = {}): ExplorerState 
  *  observe identity via the wrapper). */
 export function withFocus(state: ExplorerState, nodeId: string): ExplorerState {
   if (!state.nodes.has(nodeId)) return state;
+  const node = state.nodes.get(nodeId)!;
+  const wasUnexpanded = node.childIds === null;
   ensureChildren(state, nodeId);
-  if (nodeId === state.focusId) return state;
+  if (nodeId === state.focusId) {
+    // Clicking the focus: re-render only if we just expanded it.
+    return wasUnexpanded ? { ...state } : state;
+  }
   return { ...state, focusId: nodeId };
 }
 
