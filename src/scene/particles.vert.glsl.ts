@@ -9,6 +9,7 @@ precision highp float;
 
 uniform float uTime;
 uniform sampler2D uCurves;
+uniform sampler2D uEdgeFades;   // 1×N texture, R = current per-edge fade (0..1)
 uniform float uCurveTexWidth;   // samples per curve
 uniform float uCurveTexHeight;  // number of curves
 uniform float uPointSize;
@@ -98,6 +99,15 @@ void main() {
   float p2 = 0.5 + 0.5 * sin(uTime * uShimmerFreq2 + aSeed * 17.7 + 1.3);
   float shimmer = pow(p1 * p2, uShimmerSharpness);
   vAlpha = fadeIn * fadeOut * mix(1.0, 0.3 + 1.7 * shimmer, uShimmerDepth);
+
+  // Per-edge fade: sample the 1×numEdges fade texture at this particle's
+  // curve. Each particle has its own pseudo-random threshold derived from
+  // aSeed; particles whose threshold exceeds the current fade are dropped.
+  // This gives a gradual "thinning" of the branch as the fade animates from
+  // 1 → 0 (or fills in 0 → 1) rather than a uniform dim.
+  float edgeFade = texture2D(uEdgeFades, vec2(0.5, (aCurveIndex + 0.5) / uCurveTexHeight)).r;
+  float dropThreshold = fract(aSeed * 0.13782 + 0.317);
+  vAlpha *= step(dropThreshold, edgeFade);
 
   vKindMix = mix(aFromCrisis, aToCrisis, life);
 

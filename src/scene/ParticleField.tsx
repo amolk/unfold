@@ -6,11 +6,17 @@ import { Timeline, sampleBezier } from "../timeline/generate";
 import { particlesVert } from "./particles.vert.glsl";
 import { particlesFrag } from "./particles.frag.glsl";
 
+// No-op raycast so the particle field never participates in click intersection.
+const noopRaycast = () => {};
+
 interface ParticleFieldProps {
   timeline: Timeline;
+  /** 1×N RGBA float texture; R channel = per-edge fade in [0,1]. Mutated by
+   *  the owner each frame; we just point a uniform at it. */
+  edgeFadeTexture: THREE.DataTexture;
 }
 
-export function ParticleField({ timeline }: ParticleFieldProps) {
+export function ParticleField({ timeline, edgeFadeTexture }: ParticleFieldProps) {
   const { size } = useThree();
   const materialRef = useRef<THREE.ShaderMaterial>(null!);
 
@@ -136,63 +142,80 @@ export function ParticleField({ timeline }: ParticleFieldProps) {
   // Build the uniforms object once per material lifetime — values are mutated
   // in place when the leva controls change so the shader updates live without
   // recompiling.
+  // Uniforms are created ONCE per mount and mutated in place. Rebuilding the
+  // object on timeline changes would reset uTime (visibly freezing animation)
+  // and force three.js to rebind every uniform — instead we keep the references
+  // stable and patch values via the effects below.
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },
-      uCurves: { value: curveTexture },
-      uCurveTexWidth: { value: samplesPerCurve },
-      uCurveTexHeight: { value: timeline.edges.length },
-      uPointSize: { value: pointSize },
-      uTubeRadius: { value: tubeRadius },
-      uDriftAmp: { value: driftAmp },
-      uDriftScale: { value: driftScale },
-      uSpeedScale: { value: speedScale },
-      uIntensity: { value: intensity },
-      uResolution: { value: new THREE.Vector2(size.width, size.height) },
-      uStableColor: { value: new THREE.Color(stableColor) },
-      uCrisisColor: { value: new THREE.Color(crisisColor) },
-      uShimmerFreq1: { value: shimmerFreq1 },
-      uShimmerFreq2: { value: shimmerFreq2 },
-      uShimmerSharpness: { value: shimmerSharpness },
-      uShimmerDepth: { value: shimmerDepth },
+      uCurves: { value: null as THREE.DataTexture | null },
+      uEdgeFades: { value: null as THREE.DataTexture | null },
+      uCurveTexWidth: { value: 1 },
+      uCurveTexHeight: { value: 1 },
+      uPointSize: { value: 1 },
+      uTubeRadius: { value: 0 },
+      uDriftAmp: { value: 0 },
+      uDriftScale: { value: 1 },
+      uSpeedScale: { value: 1 },
+      uIntensity: { value: 0.1 },
+      uResolution: { value: new THREE.Vector2(1, 1) },
+      uStableColor: { value: new THREE.Color() },
+      uCrisisColor: { value: new THREE.Color() },
+      uShimmerFreq1: { value: 0 },
+      uShimmerFreq2: { value: 0 },
+      uShimmerSharpness: { value: 1 },
+      uShimmerDepth: { value: 0 },
     }),
-    // Only rebuild when the curve set changes — everything else is updated live.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [curveTexture, samplesPerCurve, timeline.edges.length],
+    [],
   );
 
-  // Live-update scalar/color uniforms when their leva values change.
+  // Curve-related uniforms: re-point to the freshly baked texture and update
+  // the height (= number of edges) whenever the visible set changes.
   useEffect(() => {
-    const u = materialRef.current?.uniforms;
-    if (!u) return;
-    u.uPointSize.value = pointSize;
-    u.uTubeRadius.value = tubeRadius;
-    u.uDriftAmp.value = driftAmp;
-    u.uDriftScale.value = driftScale;
-    u.uSpeedScale.value = speedScale;
-    u.uIntensity.value = intensity;
-    u.uShimmerFreq1.value = shimmerFreq1;
-    u.uShimmerFreq2.value = shimmerFreq2;
-    u.uShimmerSharpness.value = shimmerSharpness;
-    u.uShimmerDepth.value = shimmerDepth;
-    u.uStableColor.value.set(stableColor);
-    u.uCrisisColor.value.set(crisisColor);
-  }, [pointSize, tubeRadius, driftAmp, driftScale, speedScale, intensity, shimmerFreq1, shimmerFreq2, shimmerSharpness, shimmerDepth, stableColor, crisisColor]);
+    uniforms.uCurves.value = curveTexture;
+    uniforms.uCurveTexWidth.value = samplesPerCurve;
+    uniforms.uCurveTexHeight.value = timeline.edges.length;
+  }, [uniforms, curveTexture, samplesPerCurve, timeline.edges.length]);
 
   useEffect(() => {
-    const u = materialRef.current?.uniforms;
-    if (!u) return;
-    u.uResolution.value.set(size.width, size.height);
-  }, [size.width, size.height]);
+    uniforms.uEdgeFades.value = edgeFadeTexture;
+  }, [uniforms, edgeFadeTexture]);
+
+  // Live-update scalar/color uniforms in place. Mutating the stable uniforms
+  // object also reaches the material because it shares the reference.
+  useEffect(() => {
+    uniforms.uPointSize.value = pointSize;
+    uniforms.uTubeRadius.value = tubeRadius;
+    uniforms.uDriftAmp.value = driftAmp;
+    uniforms.uDriftScale.value = driftScale;
+    uniforms.uSpeedScale.value = speedScale;
+    uniforms.uIntensity.value = intensity;
+    uniforms.uShimmerFreq1.value = shimmerFreq1;
+    uniforms.uShimmerFreq2.value = shimmerFreq2;
+    uniforms.uShimmerSharpness.value = shimmerSharpness;
+    uniforms.uShimmerDepth.value = shimmerDepth;
+    uniforms.uStableColor.value.set(stableColor);
+    uniforms.uCrisisColor.value.set(crisisColor);
+  }, [uniforms, pointSize, tubeRadius, driftAmp, driftScale, speedScale, intensity, shimmerFreq1, shimmerFreq2, shimmerSharpness, shimmerDepth, stableColor, crisisColor]);
+
+  useEffect(() => {
+    uniforms.uResolution.value.set(size.width, size.height);
+  }, [uniforms, size.width, size.height]);
 
   useFrame((_, dt) => {
-    if (materialRef.current) {
-      materialRef.current.uniforms.uTime.value += dt;
-    }
+    uniforms.uTime.value += dt;
   });
 
   return (
-    <points geometry={geometry} frustumCulled={false}>
+    <points
+      geometry={geometry}
+      frustumCulled={false}
+      // Raycaster sees the dummy base positions (all at origin), not the
+      // shader-displaced positions, so without this the particles act as an
+      // invisible click trap around the world origin.
+      raycast={noopRaycast}
+    >
       <shaderMaterial
         ref={materialRef}
         uniforms={uniforms}

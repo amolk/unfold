@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import { useControls, folder } from "leva";
 import * as THREE from "three";
 import { Timeline } from "../timeline/generate";
@@ -8,15 +8,26 @@ import { nodesFrag } from "./nodes.frag.glsl";
 
 interface NodesProps {
   timeline: Timeline;
+  focusedIndex?: number;
+  onSelectNode?: (index: number) => void;
+  /** Per-instance fade in [0,1]; backing array is mutated by the owner each
+   *  frame, we just (re)bind it and set needsUpdate. */
+  fadeAttribute: THREE.InstancedBufferAttribute;
 }
 
-export function Nodes({ timeline }: NodesProps) {
+export function Nodes({
+  timeline,
+  focusedIndex = -1,
+  onSelectNode,
+  fadeAttribute,
+}: NodesProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null!);
   const materialRef = useRef<THREE.ShaderMaterial>(null!);
 
   const {
     nodeRadius,
     crisisScale,
+    focusScale,
     plasmaScale,
     plasmaSpeed,
     rimStrength,
@@ -26,6 +37,7 @@ export function Nodes({ timeline }: NodesProps) {
   } = useControls("Nodes", {
     nodeRadius: { value: 0.2, min: 0.02, max: 1.5, step: 0.01 },
     crisisScale: { value: 1.6, min: 0.5, max: 4, step: 0.05 },
+    focusScale: { value: 1.8, min: 1, max: 4, step: 0.05 },
     stableNodeColor: "#8CD0FF",
     crisisNodeColor: "#FFB060",
     Plasma: folder({
@@ -36,13 +48,13 @@ export function Nodes({ timeline }: NodesProps) {
     }),
   });
 
-  // Per-instance attribute buffers. Rebuilt when the timeline changes.
-  const { positions, instColors, instKinds, instScales } = useMemo(() => {
+  // Static per-instance buffers (colors, kinds) rebuilt when the visible set
+  // changes. Scale and emphasis are recomputed when focusedIndex changes.
+  const { positions, instColors, instKinds } = useMemo(() => {
     const n = timeline.nodes.length;
     const positions = new Float32Array(n * 3);
     const instColors = new Float32Array(n * 3);
     const instKinds = new Float32Array(n);
-    const instScales = new Float32Array(n);
     const stable = new THREE.Color(stableNodeColor);
     const crisis = new THREE.Color(crisisNodeColor);
     timeline.nodes.forEach((node, i) => {
@@ -54,14 +66,11 @@ export function Nodes({ timeline }: NodesProps) {
       instColors[i * 3 + 1] = col.g;
       instColors[i * 3 + 2] = col.b;
       instKinds[i] = node.kind === "crisis" ? 1 : 0;
-      instScales[i] = node.kind === "crisis" ? crisisScale : 1;
     });
-    return { positions, instColors, instKinds, instScales };
-    // Recolor when colors change without rebuilding geometry by re-running this.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeline, stableNodeColor, crisisNodeColor, crisisScale]);
+    return { positions, instColors, instKinds };
+  }, [timeline, stableNodeColor, crisisNodeColor]);
 
-  // Apply the per-instance matrices (translations only) once per data change.
+  // Apply instance matrices + (re)bind the static per-instance attributes.
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
@@ -72,8 +81,12 @@ export function Nodes({ timeline }: NodesProps) {
     }
     mesh.count = timeline.nodes.length;
     mesh.instanceMatrix.needsUpdate = true;
+    // InstancedMesh.raycast checks the bounding sphere first; it isn't
+    // auto-updated when instance matrices change, so without this the
+    // raycaster only intersects instances near the original origin position.
+    mesh.computeBoundingSphere();
+    mesh.computeBoundingBox();
 
-    // (Re)bind the per-instance attribute buffers.
     const geom = mesh.geometry as THREE.InstancedBufferGeometry;
     geom.setAttribute(
       "aInstanceColor",
@@ -83,11 +96,40 @@ export function Nodes({ timeline }: NodesProps) {
       "aInstanceKind",
       new THREE.InstancedBufferAttribute(instKinds, 1),
     );
+  }, [timeline, positions, instColors, instKinds]);
+
+  // (Re)bind the externally-owned fade attribute. Backing array is mutated by
+  // the parent each frame; we don't recreate it here.
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const geom = mesh.geometry as THREE.InstancedBufferGeometry;
+    geom.setAttribute("aInstanceFade", fadeAttribute);
+  }, [fadeAttribute]);
+
+  // Scale + emphasis depend on the focus, so they update independently when
+  // the user navigates without rebuilding the color/kind buffers.
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const n = timeline.nodes.length;
+    const scales = new Float32Array(n);
+    const emphases = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let s = timeline.nodes[i].kind === "crisis" ? crisisScale : 1;
+      if (i === focusedIndex) {
+        s *= focusScale;
+        emphases[i] = 1;
+      }
+      scales[i] = s;
+    }
+    const geom = mesh.geometry as THREE.InstancedBufferGeometry;
+    geom.setAttribute("aInstanceScale", new THREE.InstancedBufferAttribute(scales, 1));
     geom.setAttribute(
-      "aInstanceScale",
-      new THREE.InstancedBufferAttribute(instScales, 1),
+      "aInstanceEmphasis",
+      new THREE.InstancedBufferAttribute(emphases, 1),
     );
-  }, [timeline, positions, instColors, instKinds, instScales]);
+  }, [timeline, focusedIndex, crisisScale, focusScale]);
 
   const uniforms = useMemo(
     () => ({
@@ -99,7 +141,6 @@ export function Nodes({ timeline }: NodesProps) {
       uHotTint: { value: new THREE.Color(1.0, 0.9, 0.75) },
       uDarkTint: { value: new THREE.Color(0.25, 0.18, 0.15) },
     }),
-    // Built once; updated below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
@@ -119,11 +160,29 @@ export function Nodes({ timeline }: NodesProps) {
     }
   });
 
+  const handleClick = (e: ThreeEvent<MouseEvent>) => {
+    if (e.instanceId == null || !onSelectNode) return;
+    e.stopPropagation();
+    onSelectNode(e.instanceId);
+  };
+  const handlePointerOver = (e: ThreeEvent<PointerEvent>) => {
+    if (!onSelectNode) return;
+    e.stopPropagation();
+    document.body.style.cursor = "pointer";
+  };
+  const handlePointerOut = () => {
+    if (!onSelectNode) return;
+    document.body.style.cursor = "";
+  };
+
   return (
     <instancedMesh
       ref={meshRef}
       args={[undefined, undefined, Math.max(1, timeline.nodes.length)]}
       frustumCulled={false}
+      onClick={onSelectNode ? handleClick : undefined}
+      onPointerOver={onSelectNode ? handlePointerOver : undefined}
+      onPointerOut={onSelectNode ? handlePointerOut : undefined}
     >
       <sphereGeometry args={[nodeRadius, 32, 24]} />
       <shaderMaterial

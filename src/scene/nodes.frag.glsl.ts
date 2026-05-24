@@ -17,6 +17,7 @@ varying vec3 vNormal;
 varying vec3 vViewDir;
 varying vec3 vInstColor;
 varying float vKind;
+varying float vEmphasis;
 
 vec3 hash3(vec3 p) {
   p = vec3(
@@ -58,15 +59,16 @@ void main() {
   // Granulation: bright cell interiors, darker cell boundaries.
   float granule = smoothstep(-0.25, 0.65, n);
 
-  vec3 baseHot  = vInstColor * uHotTint * uHotBoost;
-  vec3 baseDark = vInstColor * uDarkTint;
+  float emphHotBoost = uHotBoost * (1.0 + 2.5 * vEmphasis);
+  vec3 baseHot  = vInstColor * uHotTint * emphHotBoost;
+  vec3 baseDark = vInstColor * uDarkTint * (1.0 + 0.8 * vEmphasis);
   vec3 surface  = mix(baseDark, baseHot, granule);
 
-  // Fresnel-ish rim. Hotter sources get a stronger corona.
+  // Fresnel-ish rim. Hotter sources (and the focused node) get a stronger corona.
   float facing = max(0.0, dot(vNormal, vViewDir));
   float rim = pow(1.0 - facing, 2.5);
   vec3 rimColor = mix(vec3(0.85, 1.0, 1.4), vec3(1.5, 0.9, 0.4), vKind);
-  surface += rimColor * rim * uRimStrength;
+  surface += rimColor * rim * uRimStrength * (1.0 + 2.0 * vEmphasis);
 
   gl_FragColor = vec4(surface, 1.0);
 }

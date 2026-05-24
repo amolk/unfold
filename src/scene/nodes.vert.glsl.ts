@@ -7,15 +7,19 @@ precision highp float;
 attribute vec3 aInstanceColor;
 attribute float aInstanceKind; // 0 = stable, 1 = crisis
 attribute float aInstanceScale;
+attribute float aInstanceEmphasis; // 0 = normal, 1 = focused
+attribute float aInstanceFade;     // 0 = invisible, 1 = full size
 
 varying vec3 vWorldPos;
 varying vec3 vNormal;
 varying vec3 vViewDir;
 varying vec3 vInstColor;
 varying float vKind;
+varying float vEmphasis;
 
 void main() {
-  vec3 scaled = position * aInstanceScale;
+  // Multiply by fade so leaving nodes shrink to a point and new ones grow in.
+  vec3 scaled = position * aInstanceScale * aInstanceFade;
   vec4 worldPos = instanceMatrix * vec4(scaled, 1.0);
   worldPos = modelMatrix * worldPos;
   vWorldPos = worldPos.xyz;
@@ -30,6 +34,7 @@ void main() {
 
   vInstColor = aInstanceColor;
   vKind = aInstanceKind;
+  vEmphasis = aInstanceEmphasis;
 
   gl_Position = projectionMatrix * mv;
 }
