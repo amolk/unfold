@@ -28,11 +28,15 @@ uniform float uShimmerDepth;       // overall mix toward flat 1.0
 
 // Node bulge: particles near a node grow and take on the node's color, so
 // nodes appear as spherical concentrations of the flow rather than separate
-// solid spheres. Up to MAX_NODES of them — extras are ignored.
-#define MAX_NODES 32
-uniform int   uNodeCount;
-uniform vec4  uNodePosFade[MAX_NODES];    // xyz = world position, w = fade
-uniform vec4  uNodeColorEmph[MAX_NODES];  // rgb = color, w = 0/1 emphasis
+// solid spheres. Data lives in two 1×N RGBA float textures (xyz=pos,w=fade
+// and rgb=color,w=emph) so we aren't bounded by MAX_VERTEX_UNIFORM_VECTORS.
+// The loop runs up to MAX_NODES_HARD_CAP iterations but breaks at uNodeCount,
+// so cost scales with the actual node count, not the cap.
+#define MAX_NODES_HARD_CAP 4096
+uniform int       uNodeCount;
+uniform sampler2D uNodePosFadeTex;     // height = uNodeTexHeight; xyz=pos, w=fade
+uniform sampler2D uNodeColorEmphTex;   // height = uNodeTexHeight; rgb=color, w=emph
+uniform float     uNodeTexHeight;
 uniform float uNodeRadius;                // base proximity radius (world units)
 uniform float uNodeEmphRadius;            // radius for the focused node
 uniform float uNodeBulgeSize;             // gl_PointSize multiplier near nodes
@@ -112,6 +116,13 @@ vec3 driftField(vec3 p, float seed) {
   );
 }
 
+vec4 nodePosFade(int i) {
+  return texture2D(uNodePosFadeTex, vec2(0.5, (float(i) + 0.5) / uNodeTexHeight));
+}
+vec4 nodeColorEmph(int i) {
+  return texture2D(uNodeColorEmphTex, vec2(0.5, (float(i) + 0.5) / uNodeTexHeight));
+}
+
 vec3 sampleCurve(float idx, float t) {
   float s = clamp(t, 0.0, 1.0) * (uCurveTexWidth - 1.0);
   float s0 = floor(s);
@@ -189,12 +200,14 @@ void main() {
   vec3 colSum = vec3(0.0);
   float colWeight = 0.0;
   vec3 nodeWarp = vec3(0.0);
-  for (int i = 0; i < MAX_NODES; i++) {
+  for (int i = 0; i < MAX_NODES_HARD_CAP; i++) {
     if (i >= uNodeCount) break;
-    vec3 npos = uNodePosFade[i].xyz;
-    float nf = uNodePosFade[i].w;
+    vec4 pf = nodePosFade(i);
+    vec3 npos = pf.xyz;
+    float nf = pf.w;
     if (nf < 0.001) continue;
-    float emph = uNodeColorEmph[i].w;
+    vec4 ce = nodeColorEmph(i);
+    float emph = ce.w;
     float effR = mix(uNodeRadius, uNodeEmphRadius, emph);
     vec3 toP = pos - npos;
     float d = length(toP);
@@ -205,7 +218,7 @@ void main() {
     float coreR = effR * 0.3;
     float kCore = exp(-(d * d) / max(coreR * coreR, 1e-5)) * nf;
     prox += k * (1.0 + emph * 0.8) + kCore * uNodeCoreStrength * (1.0 + emph * 2.0);
-    colSum += uNodeColorEmph[i].rgb * (k + kCore * 0.5);
+    colSum += ce.rgb * (k + kCore * 0.5);
     colWeight += k + kCore * 0.5;
 
     // Swirl + gravity zone extends slightly beyond the proximity radius.

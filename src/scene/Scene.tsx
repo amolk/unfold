@@ -6,17 +6,22 @@ import * as THREE from "three";
 import { ParticleField, type NodeBulgeData } from "./ParticleField";
 import { Nodes } from "./Nodes";
 
-// Must match the shader's MAX_NODES.
-const MAX_BULGE_NODES = 32;
+// Hard cap for the shader's bulge loop and the height of the node-data
+// textures. The shader still early-exits at uNodeCount, so cost scales with
+// the actual active node count, not this number. Picked large enough that any
+// realistic tree fits without re-allocating.
+const NODE_TEX_HEIGHT = 4096;
 import { CameraFollow } from "./CameraFollow";
 import {
   createExplorer,
   withFocus,
+  toggleExpanded,
   getVisibleScene,
   STUB_FROM_ID,
   type ExplorerState,
   type ExplorerNode,
   type ExplorerEdge,
+  type ExplorerMode,
 } from "../explorer/state";
 import type { Timeline, TimelineEdge, TimelineNode } from "../timeline/generate";
 
@@ -48,8 +53,19 @@ interface Built {
 }
 
 export function Scene() {
-  const [{ seed, cameraEase, fadeSpeed, sphereOpacity, stableNodeColor, crisisNodeColor }, set] =
-    useControls("Explorer", () => ({
+  const [
+    { mode, seed, cameraEase, fadeSpeed, sphereOpacity, stableNodeColor, crisisNodeColor },
+    set,
+  ] = useControls("Explorer", () => ({
+      mode: {
+        value: "single-path" as ExplorerMode,
+        options: {
+          "single path": "single-path",
+          "toggle expand": "toggle",
+          "full tree": "full-tree",
+        },
+        label: "mode",
+      },
       seed: { value: 7, min: 1, max: 9999, step: 1 },
       regenerate: button(() => set({ seed: Math.floor(Math.random() * 9999) })),
       "copy settings": button(() => {
@@ -81,7 +97,7 @@ export function Scene() {
       crisisNodeColor: { value: "#e0a050", label: "node crisis" },
     })) as any;
 
-  const [explorer, setExplorer] = useState<ExplorerState>(() => createExplorer({ seed }));
+  const [explorer, setExplorer] = useState<ExplorerState>(() => createExplorer({ seed, mode }));
   // CameraFollow fights OrbitControls panning by yanking the target back to
   // the focus. Until the user has actually selected something, leave the
   // camera entirely to them — first click arms the follower.
@@ -93,16 +109,38 @@ export function Scene() {
   }>({ nodes: new Map(), edges: new Map() });
 
   // Node-bulge data: stable references repopulated each frame from the active
-  // set. Same instance for the entire component lifetime so the GPU just sees
-  // the latest values without rebinding.
-  const nodeBulge = useMemo<NodeBulgeData>(
-    () => ({
-      posFade: new Float32Array(MAX_BULGE_NODES * 4),
-      colorEmph: new Float32Array(MAX_BULGE_NODES * 4),
+  // set. The Float32Arrays are mutated in place; the DataTextures wrap them
+  // and just need `needsUpdate = true` after each write. We use textures
+  // (instead of uniform arrays) because uniform-array data is bounded by
+  // MAX_VERTEX_UNIFORM_VECTORS, which caps us at a few hundred nodes on many
+  // GPUs — texture data has no such cap.
+  const nodeBulge = useMemo<NodeBulgeData>(() => {
+    const posFade = new Float32Array(NODE_TEX_HEIGHT * 4);
+    const colorEmph = new Float32Array(NODE_TEX_HEIGHT * 4);
+    const makeTex = (data: Float32Array<ArrayBuffer>) => {
+      const t = new THREE.DataTexture(
+        data,
+        1,
+        NODE_TEX_HEIGHT,
+        THREE.RGBAFormat,
+        THREE.FloatType,
+      );
+      t.minFilter = THREE.NearestFilter;
+      t.magFilter = THREE.NearestFilter;
+      t.wrapS = THREE.ClampToEdgeWrapping;
+      t.wrapT = THREE.ClampToEdgeWrapping;
+      t.needsUpdate = true;
+      return t;
+    };
+    return {
+      posFade,
+      colorEmph,
+      posFadeTex: makeTex(posFade),
+      colorEmphTex: makeTex(colorEmph),
       count: { value: 0 },
-    }),
-    [],
-  );
+      texHeight: NODE_TEX_HEIGHT,
+    };
+  }, []);
   const stableColor3 = useMemo(() => new THREE.Color(), []);
   const crisisColor3 = useMemo(() => new THREE.Color(), []);
   useEffect(() => {
@@ -115,14 +153,16 @@ export function Scene() {
   // mutated through stable refs/typed arrays.
   const [activeKey, setActiveKey] = useState(0);
 
-  // Reset both explorer and active set when seed changes (or regenerate fires).
+  // Reset both explorer and active set when seed or mode changes. Mode swaps
+  // need a fresh state because full-tree pre-generates the whole tree at
+  // create time, and toggle/single-path start with the user driving expansion.
   useEffect(() => {
-    setExplorer(createExplorer({ seed }));
+    setExplorer(createExplorer({ seed, mode }));
     activeRef.current.nodes.clear();
     activeRef.current.edges.clear();
     setActiveKey((k) => k + 1);
     setFollowArmed(false);
-  }, [seed]);
+  }, [seed, mode]);
 
   // Sync active set against the explorer's current visible scene.
   useEffect(() => {
@@ -302,13 +342,14 @@ export function Scene() {
     });
     built.edgeFadeTexture.needsUpdate = true;
 
-    // Repopulate the bulge arrays for the shader. We push position, fade, color
-    // and a 0/1 focus emphasis flag for each active node. Skip lingering dead
-    // entries so they don't consume one of the MAX_BULGE_NODES slots.
+    // Repopulate the bulge data textures for the shader. We push position,
+    // fade, color and a 0/1 focus emphasis flag for each active node. Skip
+    // lingering dead entries so they don't consume one of the NODE_TEX_HEIGHT
+    // slots.
     const focusId = explorer.focusId;
     let bi = 0;
     for (const entry of activeRef.current.nodes.values()) {
-      if (bi >= MAX_BULGE_NODES) break;
+      if (bi >= NODE_TEX_HEIGHT) break;
       if (entry.fade < 0.005) continue;
       const p4 = bi * 4;
       const c = entry.node.kind === "crisis" ? crisisColor3 : stableColor3;
@@ -323,13 +364,25 @@ export function Scene() {
       bi++;
     }
     nodeBulge.count.value = bi;
+    nodeBulge.posFadeTex.needsUpdate = true;
+    nodeBulge.colorEmphTex.needsUpdate = true;
   });
 
   const handleSelectNode = useCallback(
     (index: number) => {
       const id = built.nodeIds[index];
       if (!id) return;
-      setExplorer((s) => withFocus(s, id));
+      setExplorer((s) => {
+        switch (s.mode) {
+          case "single-path":
+            return withFocus(s, id);
+          case "toggle":
+            return toggleExpanded(s, id);
+          case "full-tree":
+            // Tree is fully expanded; click only updates focus for the camera.
+            return s.focusId === id ? s : { ...s, focusId: id };
+        }
+      });
       setFollowArmed(true);
     },
     [built.nodeIds],

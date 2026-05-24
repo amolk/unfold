@@ -21,12 +21,28 @@ export interface ExplorerEdge {
   toKind: NodeKind;
 }
 
+/** How the visible subset of the tree is chosen.
+ *  - "single-path": only the root→focus chain and focus's direct children.
+ *    Clicking a node moves focus, collapsing siblings that aren't on the new
+ *    path. (Original behavior.)
+ *  - "toggle":      every node whose ancestors are all in `expanded` is
+ *    visible. Clicking a node toggles its own `expanded` membership —
+ *    explored branches stay around until clicked again to hide.
+ *  - "full-tree":   the whole pre-generated tree is visible at once; clicks
+ *    only update focus for the camera. */
+export type ExplorerMode = "single-path" | "toggle" | "full-tree";
+
 export interface ExplorerState {
   nodes: Map<string, ExplorerNode>;
   edges: Map<string, ExplorerEdge>;
   rootId: string;
   focusId: string;
   rootSeed: number;
+  mode: ExplorerMode;
+  /** Used in "toggle" mode: ids of nodes whose children are revealed. A node
+   *  is visible iff every ancestor (root excluded — it's always visible) is
+   *  in this set. Empty in other modes. */
+  expanded: Set<string>;
 }
 
 // --- deterministic PRNG ---------------------------------------------------
@@ -61,6 +77,9 @@ function nodeRng(node: ExplorerNode, rootSeed: number): () => number {
 
 export interface CreateOptions {
   seed?: number;
+  mode?: ExplorerMode;
+  /** Max depth for "full-tree" mode pre-generation. Ignored in other modes. */
+  fullTreeDepth?: number;
 }
 
 /** Sentinel id for the synthetic upstream end of the root's stub edge. No
@@ -69,7 +88,11 @@ export interface CreateOptions {
  *  before it's expanded. */
 export const STUB_FROM_ID = "__stub__";
 
-export function createExplorer({ seed = 7 }: CreateOptions = {}): ExplorerState {
+export function createExplorer({
+  seed = 7,
+  mode = "single-path",
+  fullTreeDepth = 4,
+}: CreateOptions = {}): ExplorerState {
   const root: ExplorerNode = {
     id: "0",
     position: new THREE.Vector3(0, 0, 0),
@@ -78,9 +101,9 @@ export function createExplorer({ seed = 7 }: CreateOptions = {}): ExplorerState 
     childIds: null,
     depth: 0,
   };
-  // Stub edge flowing into the root from -x. Without it the initial scene has
-  // no edges, so no particles render and the (invisible) root sphere has no
-  // bulge to mark its position.
+  // Stub edge flowing into the root from below. Without it the initial scene
+  // has no edges, so no particles render and the (invisible) root sphere has
+  // no bulge to mark its position.
   const stubEdge: ExplorerEdge = {
     id: `${STUB_FROM_ID}->${root.id}`,
     fromId: STUB_FROM_ID,
@@ -100,10 +123,27 @@ export function createExplorer({ seed = 7 }: CreateOptions = {}): ExplorerState 
     rootId: root.id,
     focusId: root.id,
     rootSeed: seed,
+    mode,
+    expanded: new Set(),
   };
-  // Don't auto-expand the root — start with just the root + its incoming
-  // stream. The user expands it by clicking.
+  if (mode === "full-tree") {
+    // Pre-generate the whole tree to a fixed depth so the user sees the full
+    // shape from the first frame. (Lazy generation here would force a click.)
+    expandSubtree(state, root.id, fullTreeDepth);
+  }
+  // Don't auto-expand the root in single-path or toggle mode — start with
+  // just the root + its incoming stream. The user expands it by clicking.
   return state;
+}
+
+/** Recursively generate children down to (and including) `depth` levels below
+ *  `nodeId`. Used to materialize the whole tree for full-tree mode. */
+function expandSubtree(state: ExplorerState, nodeId: string, depth: number) {
+  if (depth <= 0) return;
+  ensureChildren(state, nodeId);
+  const node = state.nodes.get(nodeId);
+  if (!node?.childIds) return;
+  for (const cid of node.childIds) expandSubtree(state, cid, depth - 1);
 }
 
 /** Focus a node. Generates its children lazily on first focus. Returns a new
@@ -119,6 +159,18 @@ export function withFocus(state: ExplorerState, nodeId: string): ExplorerState {
     return wasUnexpanded ? { ...state } : state;
   }
   return { ...state, focusId: nodeId };
+}
+
+/** Toggle "toggle" mode's expansion of a node. Adds to `expanded` if absent
+ *  (generating children if needed) and removes otherwise. Also moves focus
+ *  to the clicked node so the camera tracks the user's last interaction. */
+export function toggleExpanded(state: ExplorerState, nodeId: string): ExplorerState {
+  if (!state.nodes.has(nodeId)) return state;
+  ensureChildren(state, nodeId);
+  const expanded = new Set(state.expanded);
+  if (expanded.has(nodeId)) expanded.delete(nodeId);
+  else expanded.add(nodeId);
+  return { ...state, expanded, focusId: nodeId };
 }
 
 function ensureChildren(state: ExplorerState, nodeId: string) {
@@ -232,22 +284,66 @@ export interface VisibleScene {
 }
 
 export function getVisibleScene(state: ExplorerState): VisibleScene {
-  const pathNodes = getPath(state);
-  const candidateNodes = getCandidates(state);
-  const pathEdges: ExplorerEdge[] = [];
-  // Synthetic stub flowing into the root — always visible so root has a
-  // particle bulge even before it's expanded.
+  // The pathNodes/candidateNodes/pathEdges/candidateEdges split is purely a
+  // historical labeling — Scene treats both node buckets and both edge
+  // buckets the same way. We keep the split so future code can re-introduce a
+  // distinction; for toggle/full-tree modes we just dump everything into the
+  // "path" buckets.
   const stub = state.edges.get(`${STUB_FROM_ID}->${state.rootId}`);
-  if (stub) pathEdges.push(stub);
-  for (let i = 1; i < pathNodes.length; i++) {
-    const e = state.edges.get(`${pathNodes[i - 1].id}->${pathNodes[i].id}`);
-    if (e) pathEdges.push(e);
+
+  if (state.mode === "single-path") {
+    const pathNodes = getPath(state);
+    const candidateNodes = getCandidates(state);
+    const pathEdges: ExplorerEdge[] = [];
+    if (stub) pathEdges.push(stub);
+    for (let i = 1; i < pathNodes.length; i++) {
+      const e = state.edges.get(`${pathNodes[i - 1].id}->${pathNodes[i].id}`);
+      if (e) pathEdges.push(e);
+    }
+    const focus = state.nodes.get(state.focusId)!;
+    const candidateEdges: ExplorerEdge[] = [];
+    for (const cid of focus.childIds ?? []) {
+      const e = state.edges.get(`${focus.id}->${cid}`);
+      if (e) candidateEdges.push(e);
+    }
+    return { pathNodes, candidateNodes, pathEdges, candidateEdges, focusId: state.focusId };
   }
-  const focus = state.nodes.get(state.focusId)!;
-  const candidateEdges: ExplorerEdge[] = [];
-  for (const cid of focus.childIds ?? []) {
-    const e = state.edges.get(`${focus.id}->${cid}`);
-    if (e) candidateEdges.push(e);
+
+  // toggle + full-tree: walk the tree, including every node reachable via
+  // the mode's inclusion rule, plus the edges between them. The root is
+  // always visible; the question is just how far we descend at each node.
+  const includeChildren = (node: ExplorerNode): boolean => {
+    if (state.mode === "full-tree") return true;
+    // toggle: descend only if the node has been expanded by the user.
+    return state.expanded.has(node.id);
+  };
+
+  const nodes: ExplorerNode[] = [];
+  const edges: ExplorerEdge[] = [];
+  if (stub) edges.push(stub);
+
+  const root = state.nodes.get(state.rootId);
+  if (root) {
+    const stack: ExplorerNode[] = [root];
+    while (stack.length) {
+      const n = stack.pop()!;
+      nodes.push(n);
+      if (!includeChildren(n) || !n.childIds) continue;
+      for (const cid of n.childIds) {
+        const child = state.nodes.get(cid);
+        if (!child) continue;
+        const edge = state.edges.get(`${n.id}->${cid}`);
+        if (edge) edges.push(edge);
+        stack.push(child);
+      }
+    }
   }
-  return { pathNodes, candidateNodes, pathEdges, candidateEdges, focusId: state.focusId };
+
+  return {
+    pathNodes: nodes,
+    candidateNodes: [],
+    pathEdges: edges,
+    candidateEdges: [],
+    focusId: state.focusId,
+  };
 }

@@ -10,12 +10,20 @@ import { particlesFrag } from "./particles.frag.glsl";
 const noopRaycast = () => {};
 
 export interface NodeBulgeData {
-  /** xyz = world position, w = per-node fade. Length = MAX_NODES * 4. */
+  /** xyz = world position, w = per-node fade. Length = texHeight * 4. */
   posFade: Float32Array;
-  /** rgb = color, w = focus emphasis (0 or 1). Length = MAX_NODES * 4. */
+  /** rgb = color, w = focus emphasis (0 or 1). Length = texHeight * 4. */
   colorEmph: Float32Array;
-  /** Number of valid entries in the arrays (capped at MAX_NODES). */
+  /** 1×texHeight RGBA float; the shader samples this instead of reading a
+   *  uniform array (which is bounded by MAX_VERTEX_UNIFORM_VECTORS). The
+   *  owner is responsible for setting needsUpdate after writing to posFade. */
+  posFadeTex: THREE.DataTexture;
+  /** As posFadeTex, but for colorEmph. */
+  colorEmphTex: THREE.DataTexture;
+  /** Number of valid entries (capped at texHeight). */
   count: { value: number };
+  /** Height of the data textures — used by the shader to convert i → uv.y. */
+  texHeight: number;
 }
 
 interface ParticleFieldProps {
@@ -33,11 +41,22 @@ export function ParticleField({
   edgeFadeTexture,
   nodeBulge,
 }: ParticleFieldProps) {
-  const { size } = useThree();
+  const { size, camera, controls } = useThree();
   const materialRef = useRef<THREE.ShaderMaterial>(null!);
+  // Reused each frame to avoid allocating in useFrame.
+  const fallbackTarget = useMemo(() => new THREE.Vector3(), []);
 
-  const {
-    particleCount,
+  // Anchors for the zoom-driven crossfade. The sliders below display the
+  // currently *effective* (lerped) value; the anchor is the "fully zoomed in"
+  // baseline that the lerp pivots around. When the user drags the slider
+  // (fromPanel=true), we treat that as a new anchor. We also stash the most
+  // recent zoom t so onChange can be evaluated in the correct context.
+  const intensityAnchor = useRef(4);
+  const pointSizeAnchor = useRef(2);
+  const zoomT = useRef(0);
+
+  const [{
+    particlesPerEdge,
     samplesPerCurve,
     pointSize,
     tubeRadius,
@@ -77,16 +96,45 @@ export function ParticleField({
     grainCore,
     grainHalo,
     grainHaloAmp,
-  } = useControls("Particles", {
-    particleCount: { value: 400_000, min: 10_000, max: 800_000, step: 10_000 },
+  }, setParticles] = useControls("Particles", () => ({
+    particlesPerEdge: { value: 4_000, min: 500, max: 30_000, step: 500, label: "per edge" },
     samplesPerCurve: { value: 64, min: 16, max: 256, step: 16 },
-    pointSize: { value: 3.6, min: 0.5, max: 30, step: 0.1 },
+    pointSize: {
+      value: 2, min: 0.5, max: 30, step: 0.1,
+      // Zoom-driven lerp: 2 at max zoom-in → 30.0 at max zoom-out. See
+      // `intensity` for the transient/anchor pattern this mirrors.
+      transient: false,
+      onChange: (v: number, _path: string, ctx: { fromPanel?: boolean }) => {
+        if (!ctx.fromPanel) return;
+        const t = zoomT.current;
+        pointSizeAnchor.current = t < 0.99 ? (v - 30.0 * t) / (1 - t) : v;
+      },
+    },
     tubeRadius: { value: 0.12, min: 0, max: 2.0, step: 0.01 },
     driftAmp: { value: 0.19, min: 0, max: 2.0, step: 0.01 },
-    driftCoherence: { value: 0.85, min: 0, max: 1, step: 0.01, label: "drift coherence" },
+    driftCoherence: { value: 0.98, min: 0, max: 1, step: 0.01, label: "drift coherence" },
     speedScale: { value: 1.22, min: 0, max: 3, step: 0.01 },
     driftScale: { value: 0.1, min: 0.1, max: 8.0, step: 0.05 },
-    intensity: { value: 0.15, min: 0.005, max: 1, step: 0.005 },
+    intensity: {
+      value: 4, min: 0.005, max: 6, step: 0.005,
+      // `transient: false` is critical here — without it leva drops the value
+      // out of the returned object as soon as we attach an onChange, leaving
+      // our useFrame reading `undefined`.
+      transient: false,
+      // User drags = new "zoomed-in" anchor. The slider value is the lerped
+      // (effective) value at the current zoom, so to make a manual change
+      // stick at the current zoom we invert the lerp; near full zoom-out the
+      // inverse explodes, so fall back to using the value directly.
+      onChange: (v: number, _path: string, ctx: { fromPanel?: boolean }) => {
+        if (!ctx.fromPanel) return;
+        const t = zoomT.current;
+        // Must mirror the cubic curve used in useFrame so dragging the slider
+        // at any zoom inverts back to a consistent anchor.
+        const inv = 1 - t;
+        const tCurved = 1 - inv * inv * inv;
+        intensityAnchor.current = tCurved < 0.99 ? (v - 0.3 * tCurved) / (1 - tCurved) : v;
+      },
+    },
     stableColor: "#8aa896",
     crisisColor: "#d06030",
     Shimmer: folder({
@@ -118,8 +166,8 @@ export function ParticleField({
       windSpeed: { value: 0.3, min: 0, max: 3, step: 0.05, label: "gust speed" },
     }),
     Glints: folder({
-      glintRatio: { value: 0.07, min: 0, max: 1, step: 0.01, label: "ratio" },
-      glintSizeMult: { value: 1.3, min: 1, max: 8, step: 0.1, label: "size mult" },
+      glintRatio: { value: 0, min: 0, max: 1, step: 0.01, label: "ratio" },
+      glintSizeMult: { value: 2.0, min: 1, max: 12, step: 0.1, label: "size mult" },
       glintIntensity: { value: 3.6, min: 1, max: 30, step: 0.1, label: "intensity" },
       glintTint: { value: "#ffd9a0", label: "tint" },
     }),
@@ -128,7 +176,7 @@ export function ParticleField({
       grainHalo: { value: 1.3, min: 0.5, max: 10, step: 0.1, label: "halo sharpness" },
       grainHaloAmp: { value: 0, min: 0, max: 1, step: 0.01, label: "halo amp" },
     }),
-  });
+  })) as any;
 
   // --- bake curves into a DataTexture (rows = curves, cols = samples) ---
   const curveTexture = useMemo(() => {
@@ -158,6 +206,9 @@ export function ParticleField({
   }, [timeline, samplesPerCurve]);
 
   // --- per-particle attribute buffers, distributed by edge weight ---
+  // Total count scales linearly with the visible edge count so a small tree
+  // and a complex tree end up at the same per-segment density.
+  const particleCount = Math.max(1, particlesPerEdge * timeline.edges.length);
   const geometry = useMemo(() => {
     const totalWeight = timeline.edges.reduce((s, e) => s + e.weight, 0);
     const positions = new Float32Array(particleCount * 3); // dummy (shader overrides)
@@ -245,11 +296,15 @@ export function ParticleField({
       uShimmerSlowFreq: { value: 0 },
       uShimmerSlowAmp: { value: 0 },
       uShimmerDepth: { value: 0 },
-      // Bulge: arrays + count. Backing Float32Arrays are owned by the parent
-      // and mutated each frame; we point the uniform value at them.
+      // Bulge: data textures + count. Backing Float32Arrays are wrapped by
+      // DataTextures owned by the parent and mutated each frame; we point the
+      // sampler uniforms at the textures. Going through textures (rather than
+      // uniform arrays) avoids MAX_VERTEX_UNIFORM_VECTORS limits on the GPU,
+      // so we can scale to thousands of nodes.
       uNodeCount: { value: 0 },
-      uNodePosFade: { value: nodeBulge.posFade },
-      uNodeColorEmph: { value: nodeBulge.colorEmph },
+      uNodePosFadeTex: { value: nodeBulge.posFadeTex },
+      uNodeColorEmphTex: { value: nodeBulge.colorEmphTex },
+      uNodeTexHeight: { value: nodeBulge.texHeight },
       uNodeRadius: { value: 0.45 },
       uNodeEmphRadius: { value: 0.8 },
       uNodeBulgeSize: { value: 0 },
@@ -279,11 +334,12 @@ export function ParticleField({
     [],
   );
 
-  // Repoint the bulge array uniforms whenever the arrays themselves are
+  // Repoint the bulge texture uniforms whenever the textures themselves are
   // recreated (rare — only on hot-reload or component remount).
   useEffect(() => {
-    uniforms.uNodePosFade.value = nodeBulge.posFade;
-    uniforms.uNodeColorEmph.value = nodeBulge.colorEmph;
+    uniforms.uNodePosFadeTex.value = nodeBulge.posFadeTex;
+    uniforms.uNodeColorEmphTex.value = nodeBulge.colorEmphTex;
+    uniforms.uNodeTexHeight.value = nodeBulge.texHeight;
   }, [uniforms, nodeBulge]);
 
   // Count updates every frame via the shared ref object — push to uniform.
@@ -350,6 +406,35 @@ export function ParticleField({
 
   useFrame((_, dt) => {
     uniforms.uTime.value += dt;
+
+    // Zoom-driven crossfade: anchor refs hold the user's "fully zoomed in"
+    // baselines; we lerp toward fixed "wide shot" targets (pointSize → 30.0,
+    // intensity → 0.7) as the camera pulls back. The result is written back
+    // to the leva sliders so the panel always shows the currently effective
+    // value. Distance range matches OrbitControls min/max in Scene.tsx.
+    const target = (controls as { target?: THREE.Vector3 } | null)?.target ?? fallbackTarget;
+    const dist = camera.position.distanceTo(target);
+    const t = THREE.MathUtils.clamp((dist - 2) / (60 - 2), 0, 1);
+    zoomT.current = t;
+    const nextPointSize = THREE.MathUtils.lerp(pointSizeAnchor.current, 30.0, t);
+    // Intensity uses a cubic ease-out: drops quickly off the zoomed-in anchor
+    // and then approaches the wide-shot value slowly through the middle and
+    // late zoom range. The same curve is applied in onChange so panel drags
+    // continue to "stick" at the current zoom.
+    const inv = 1 - t;
+    const tIntensity = 1 - inv * inv * inv;
+    const nextIntensity = THREE.MathUtils.lerp(intensityAnchor.current, 0.3, tIntensity);
+    uniforms.uPointSize.value = nextPointSize;
+    uniforms.uIntensity.value = nextIntensity;
+    // Only push to leva when the value actually moved — avoids re-rendering
+    // (and re-running the leva-watch effect) every frame while the camera is
+    // still. 1e-4 is below the slider step for both controls.
+    if (Math.abs(nextPointSize - pointSize) > 1e-4) {
+      setParticles({ pointSize: nextPointSize });
+    }
+    if (Math.abs(nextIntensity - intensity) > 1e-4) {
+      setParticles({ intensity: nextIntensity });
+    }
   });
 
   return (
