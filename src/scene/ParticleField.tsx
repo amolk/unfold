@@ -83,6 +83,8 @@ export function ParticleField({
     bunchFreq,
     bunchContrast,
     bunchTime,
+    burstEnable,
+    burstRate,
     streakAmp,
     minPointSize,
     speedScale,
@@ -168,6 +170,11 @@ export function ParticleField({
     bunchFreq: { value: 0, min: 0, max: 40, step: 0.5, label: "bunch freq" },
     bunchContrast: { value: 1, min: 0, max: 1, step: 0.01, label: "bunch contrast" },
     bunchTime: { value: 0, min: 0, max: 3, step: 0.01, label: "bunch drift" },
+    // Burst gating: each stream emits rand(100..500) points continuously,
+    // pauses for rand(200..700) points' worth of time, then repeats — both
+    // re-rolled per cycle, per stream. Rate sets points/sec per stream.
+    burstEnable: { value: true, label: "burst on/off" },
+    burstRate: { value: 60, min: 1, max: 500, step: 1, label: "burst rate (pts/s)" },
     // Motion-blur streak: enlarge each point sprite along the screen-space
     // curve tangent and elongate the visible region into an ellipse aligned
     // with motion. 0 = round grain (original look).
@@ -194,7 +201,7 @@ export function ParticleField({
     },
     speedScale: { value: 1.25, min: 0, max: 3, step: 0.01 },
     intensity: {
-      value: 4, min: 0.005, max: 6, step: 0.005,
+      value: 4, min: 1.5, max: 6, step: 0.005,
       // `transient: false` is critical here — without it leva drops the value
       // out of the returned object as soon as we attach an onChange, leaving
       // our useFrame reading `undefined`.
@@ -411,6 +418,8 @@ export function ParticleField({
       uBunchFreq: { value: 0 },
       uBunchContrast: { value: 0 },
       uBunchTime: { value: 0 },
+      uBurstEnable: { value: 0 },
+      uBurstRate: { value: 60 },
       uStreakAmp: { value: 0 },
       uMinPointSize: { value: 1 },
       uSpeedScale: { value: 1 },
@@ -505,6 +514,8 @@ export function ParticleField({
     uniforms.uBunchFreq.value = bunchFreq;
     uniforms.uBunchContrast.value = bunchContrast;
     uniforms.uBunchTime.value = bunchTime;
+    uniforms.uBurstEnable.value = burstEnable ? 1 : 0;
+    uniforms.uBurstRate.value = burstRate;
     uniforms.uStreakAmp.value = streakAmp;
     uniforms.uMinPointSize.value = minPointSize;
     uniforms.uSpeedScale.value = speedScale;
@@ -538,7 +549,7 @@ export function ParticleField({
     uniforms.uGrainCore.value = grainCore;
     uniforms.uGrainHalo.value = grainHalo;
     uniforms.uGrainHaloAmp.value = grainHaloAmp;
-  }, [uniforms, pointSize, tubeRadius, wispAmp, wispStretch, wispMorphSpeed, edgeFlowSpread, streamPerturb, gustAmp, gustSpeed, wispOctave, pinEnds, nodeVolume, bunchFreq, bunchContrast, bunchTime, streakAmp, minPointSize, speedScale, intensity, shimmerSpikeFreq, shimmerSpikeAmp, shimmerSharpness, shimmerSlowFreq, shimmerSlowAmp, shimmerDepth, stableColor, crisisColor, nodeRadius, nodeEmphRadius, nodeBulgeSize, nodeColorMix, nodeBoost, nodeDriftBoost, nodeSwirlStrength, nodeSwirlSpeed, nodeGravity, nodeCenterGravity, nodeCoreStrength, windX, windY, windZ, windStrength, windSpeed, glintRatio, glintSizeMult, glintIntensity, glintTint, grainCore, grainHalo, grainHaloAmp]);
+  }, [uniforms, pointSize, tubeRadius, wispAmp, wispStretch, wispMorphSpeed, edgeFlowSpread, streamPerturb, gustAmp, gustSpeed, wispOctave, pinEnds, nodeVolume, bunchFreq, bunchContrast, bunchTime, burstEnable, burstRate, streakAmp, minPointSize, speedScale, intensity, shimmerSpikeFreq, shimmerSpikeAmp, shimmerSharpness, shimmerSlowFreq, shimmerSlowAmp, shimmerDepth, stableColor, crisisColor, nodeRadius, nodeEmphRadius, nodeBulgeSize, nodeColorMix, nodeBoost, nodeDriftBoost, nodeSwirlStrength, nodeSwirlSpeed, nodeGravity, nodeCenterGravity, nodeCoreStrength, windX, windY, windZ, windStrength, windSpeed, glintRatio, glintSizeMult, glintIntensity, glintTint, grainCore, grainHalo, grainHaloAmp]);
 
   useEffect(() => {
     uniforms.uResolution.value.set(size.width, size.height);

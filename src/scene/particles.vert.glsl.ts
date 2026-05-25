@@ -45,6 +45,12 @@ uniform float uNodeVolume;
 uniform float uBunchFreq;
 uniform float uBunchContrast;      // 0 = no gating (uniform), 1 = full gate
 uniform float uBunchTime;          // how fast the bunch pattern drifts in time
+// Burst gating: each stream emits N points continuously (N = rand 100..500),
+// then pauses for the equivalent of M points (M = rand 200..700), then
+// repeats — both re-rolled per cycle, per stream. "Point production time"
+// is set by uBurstRate (points/sec/stream). uBurstEnable toggles the gate.
+uniform float uBurstEnable;
+uniform float uBurstRate;
 // Motion-blur stretch: each point sprite is enlarged along the screen-space
 // curve tangent so the particle reads as a short streak rather than a dot.
 // 0 = round, higher = longer streak.
@@ -318,6 +324,41 @@ void main() {
     // and how steep the cutoff is.
     gate = smoothstep(0.5 - 0.5 * uBunchContrast, 0.5 + 0.5 * uBunchContrast, gate);
     vAlpha *= mix(1.0, gate, uBunchContrast);
+  }
+
+  // Burst stream gate. Conceptually each stream emits points at uBurstRate per
+  // second; within each cycle we pick N (100..500) ON-points then M (200..700)
+  // OFF-points, deterministically from (streamId, cycleIdx). The gate is
+  // evaluated at the particle's *emission time* — uTime minus how long it took
+  // to reach its current life at lifeRate = aSpeed * uSpeedScale. That way
+  // each particle carries its ON/OFF verdict for life, so the stream stays a
+  // continuous filament with visible gaps that travel down the curve as the
+  // flow advances — not a stream that blinks on and off as a whole.
+  //
+  // To keep the loop bounded forever we fold emissionTime into a window of
+  // MAX_CYC cycles. Worst case window = MAX_CYC * (500 + 700) = 38400 points;
+  // at the default 60 pts/s the pattern wraps after ~640 s, which the eye
+  // never notices because each window starts at a different per-stream phase.
+  if (uBurstEnable > 0.5 && uBurstRate > 0.0001) {
+    const int MAX_CYC = 32;
+    float lifeRate = aSpeed * uSpeedScale;
+    float emissionTime = uTime - life / max(lifeRate, 1e-6);
+    float streamSeed = aStreamId * 1.61803 + 0.137;
+    // Per-stream phase offset so streams don't share a global ON/OFF clock.
+    float phaseOff = fract(sin(streamSeed * 13.71) * 43758.5453) * 1200.0;
+    float windowLen = float(MAX_CYC) * 1200.0;        // MAX_CYC * (ON_max + OFF_max)
+    float burstP = mod(emissionTime * uBurstRate + phaseOff, windowLen);
+    float cumP = 0.0;
+    float gate = 0.0;
+    for (int i = 0; i < MAX_CYC; i++) {
+      float cs = streamSeed + float(i) * 17.31;
+      float n  = 100.0 + 400.0 * fract(sin(cs * 91.13)        * 43758.5453); // ON points
+      float m  = 200.0 + 500.0 * fract(sin(cs * 23.71 + 4.21) * 43758.5453); // OFF points
+      if (burstP < cumP + n) { gate = 1.0; break; }
+      if (burstP < cumP + n + m) { gate = 0.0; break; }
+      cumP += n + m;
+    }
+    vAlpha *= gate;
   }
 
   vKindMix = mix(aFromCrisis, aToCrisis, life);
