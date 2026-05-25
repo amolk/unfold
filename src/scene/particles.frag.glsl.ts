@@ -24,10 +24,28 @@ varying float vKindMix;
 varying float vNodeProx;
 varying vec3  vNodeCol;
 varying float vIsGlint;
+// Stream identity, forwarded for the upcoming per-stream pigment palette.
+// Currently unused in the fragment shader — declared so the link matches
+// the vertex shader.
+varying float vStreamId;
+// Screen-space tangent direction (gl_PointCoord frame, y-down) and the
+// stretch factor the vertex shader applied to gl_PointSize. The fragment
+// shader uses these to draw an elongated ellipse oriented along the
+// tangent inside the enlarged point sprite.
+varying vec2  vScreenTangent;
+varying float vStreakFactor;
 
 void main() {
   vec2 uv = gl_PointCoord * 2.0 - 1.0;
-  float r2 = dot(uv, uv);
+  // Streak shape: project uv onto the screen tangent and its perpendicular,
+  // then compress the perpendicular axis by vStreakFactor. The sprite was
+  // enlarged by the same factor in the vertex shader, so the visible region
+  // ends up as an ellipse aligned with the motion direction. When
+  // vStreakFactor == 1 this reduces to the original circular grain.
+  vec2 perpDir = vec2(-vScreenTangent.y, vScreenTangent.x);
+  float par  = dot(uv, vScreenTangent);
+  float perp = dot(uv, perpDir) * vStreakFactor;
+  float r2 = par * par + perp * perp;
   if (r2 > 1.0) discard;
   float core = exp(-r2 * uGrainCore);
   float halo = exp(-r2 * uGrainHalo) * uGrainHaloAmp;

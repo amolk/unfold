@@ -53,16 +53,38 @@ export function ParticleField({
   // recent zoom t so onChange can be evaluated in the correct context.
   const intensityAnchor = useRef(4);
   const pointSizeAnchor = useRef(2);
+  // minPointSize anchor (zoomed-in baseline). The shimmer-guard floor lerps
+  // from this value down to 1.5 at zoom-out, with a cubic ease-out — so the
+  // floor drops off quickly from zoom-in and then hovers near 1.5 through
+  // the middle and late zoom range.
+  const minPointSizeAnchor = useRef(5);
+  // Shimmer spike amplitude is zoom-driven, anchor at zoom-in → 0 at
+  // zoom-out (linear). Glints are noticeable up close and fade out as the
+  // camera pulls back to a wide shot.
+  const shimmerSpikeAmpAnchor = useRef(5);
   const zoomT = useRef(0);
 
   const [{
     particlesPerEdge,
+    streamsPerEdge,
     samplesPerCurve,
     pointSize,
     tubeRadius,
-    driftAmp,
-    driftScale,
-    driftCoherence,
+    wispAmp,
+    wispStretch,
+    wispMorphSpeed,
+    edgeFlowSpread,
+    streamPerturb,
+    gustAmp,
+    gustSpeed,
+    wispOctave,
+    pinEnds,
+    nodeVolume,
+    bunchFreq,
+    bunchContrast,
+    bunchTime,
+    streakAmp,
+    minPointSize,
     speedScale,
     intensity,
     stableColor,
@@ -98,6 +120,10 @@ export function ParticleField({
     grainHaloAmp,
   }, setParticles] = useControls("Particles", () => ({
     particlesPerEdge: { value: 4_000, min: 500, max: 30_000, step: 500, label: "per edge" },
+    // Streams = number of distinct smoke filaments per edge. Each stream's
+    // particles share a coherent path through the noise volume; fewer streams
+    // → fatter, more visible wisps; more streams → smoother sheet.
+    streamsPerEdge: { value: 30, min: 1, max: 256, step: 1, label: "streams/edge" },
     samplesPerCurve: { value: 64, min: 16, max: 256, step: 16 },
     pointSize: {
       value: 2, min: 0.5, max: 30, step: 0.1,
@@ -110,11 +136,63 @@ export function ParticleField({
         pointSizeAnchor.current = t < 0.99 ? (v - 30.0 * t) / (1 - t) : v;
       },
     },
-    tubeRadius: { value: 0.12, min: 0, max: 2.0, step: 0.01 },
-    driftAmp: { value: 0.19, min: 0, max: 2.0, step: 0.01 },
-    driftCoherence: { value: 0.98, min: 0, max: 1, step: 0.01, label: "drift coherence" },
-    speedScale: { value: 1.22, min: 0, max: 3, step: 0.01 },
-    driftScale: { value: 0.1, min: 0.1, max: 8.0, step: 0.05 },
+    tubeRadius: { value: 0.07, min: 0, max: 2.0, step: 0.01 },
+    // Wisp: displacement from the curve spine is a dominant edge-local wind
+    // (shared by all streams on the edge → adjacent threads curve together
+    // into one wisp) plus a small per-stream perturbation (thread identity).
+    // Gusts modulate the wind strength over time so the wisp pushes sideways
+    // in bursts instead of swaying uniformly. Defaults captured from a tuned
+    // max-zoom-out look.
+    wispAmp: { value: 0.19, min: 0, max: 3.0, step: 0.01, label: "wisp amp" },
+    wispStretch: { value: 1.1, min: 0.1, max: 20.0, step: 0.1, label: "wisp stretch" },
+    wispMorphSpeed: { value: 0.01, min: 0, max: 1.0, step: 0.005, label: "morph speed" },
+    edgeFlowSpread: { value: 0.29, min: 0, max: 5.0, step: 0.01, label: "edge spread" },
+    streamPerturb: { value: 0.75, min: 0, max: 1.0, step: 0.01, label: "thread detail" },
+    gustAmp: { value: 0.21, min: 0, max: 2.0, step: 0.01, label: "gust amp" },
+    gustSpeed: { value: 0.37, min: 0, max: 3.0, step: 0.01, label: "gust speed" },
+    wispOctave: { value: 1.14, min: 0, max: 1.5, step: 0.01, label: "fine octave" },
+    // Pin ends: collapse the wisp displacement at life=0 and life=1 so the
+    // start/end of each segment is anchored near the spine. Combined with
+    // `node volume` below, segments meeting at a node form a small 3D ball
+    // rather than a mathematical point.
+    pinEnds: { value: 0.18, min: 0, max: 0.5, step: 0.01, label: "pin ends" },
+    // Node volume: radius of the per-stream parking ball that takes over as
+    // the pinch closes. 0 = collapse to spine point; higher = larger node
+    // blob. Particles converging from any segment meeting at the same world
+    // position fill the same ball, so nodes read as 3D volumes.
+    nodeVolume: { value: 0.315, min: 0, max: 0.5, step: 0.005, label: "node volume" },
+    // Bursty emission: gate alpha by a noise function indexed by
+    // (streamId, life, time). Adjacent particles share the gate so bursts
+    // read as coherent clumps moving through each stream, not per-particle
+    // flicker. uBunchTime drifts the burst pattern over time.
+    bunchFreq: { value: 0, min: 0, max: 40, step: 0.5, label: "bunch freq" },
+    bunchContrast: { value: 1, min: 0, max: 1, step: 0.01, label: "bunch contrast" },
+    bunchTime: { value: 0, min: 0, max: 3, step: 0.01, label: "bunch drift" },
+    // Motion-blur streak: enlarge each point sprite along the screen-space
+    // curve tangent and elongate the visible region into an ellipse aligned
+    // with motion. 0 = round grain (original look).
+    streakAmp: { value: 0, min: 0, max: 8, step: 0.05, label: "streak" },
+    // Sub-pixel shimmer guard. When the intended gl_PointSize would drop
+    // below this value (in pixels), we clamp the size and dim the alpha by
+    // the squared coverage ratio. Keeps very small particles stable instead
+    // of stuttering. 1.0 is the natural rasterizer floor.
+    //
+    // Zoom-driven: lerps from the anchor (zoomed-in baseline) down to 1.5
+    // at zoom-out using the same cubic ease-out as `intensity`. The slider
+    // shows the currently effective value; dragging it sets a new anchor
+    // via the inverse-lerp pattern.
+    minPointSize: {
+      value: 1.5, min: 1.0, max: 8.0, step: 0.1, label: "min px (shimmer)",
+      transient: false,
+      onChange: (v: number, _path: string, ctx: { fromPanel?: boolean }) => {
+        if (!ctx.fromPanel) return;
+        const t = zoomT.current;
+        const inv = 1 - t;
+        const tCurved = 1 - inv * inv * inv;
+        minPointSizeAnchor.current = tCurved < 0.99 ? (v - 1.5 * tCurved) / (1 - tCurved) : v;
+      },
+    },
+    speedScale: { value: 1.25, min: 0, max: 3, step: 0.01 },
     intensity: {
       value: 4, min: 0.005, max: 6, step: 0.005,
       // `transient: false` is critical here — without it leva drops the value
@@ -132,31 +210,42 @@ export function ParticleField({
         // at any zoom inverts back to a consistent anchor.
         const inv = 1 - t;
         const tCurved = 1 - inv * inv * inv;
-        intensityAnchor.current = tCurved < 0.99 ? (v - 0.3 * tCurved) / (1 - tCurved) : v;
+        intensityAnchor.current = tCurved < 0.99 ? (v - 0.15 * tCurved) / (1 - tCurved) : v;
       },
     },
     stableColor: "#8aa896",
     crisisColor: "#d06030",
     Shimmer: folder({
       shimmerSpikeFreq: { value: 1.1, min: 0, max: 20, step: 0.1, label: "spike freq" },
-      shimmerSpikeAmp: { value: 5.0, min: 0, max: 10, step: 0.05, label: "spike amp" },
+      // Zoom-driven (linear): lerps from anchor at zoom-in down to 0 at
+      // zoom-out. The slider shows the currently effective value; dragging
+      // it sets a new anchor via the inverse-lerp pattern.
+      shimmerSpikeAmp: {
+        value: 5.0, min: 0, max: 10, step: 0.05, label: "spike amp",
+        transient: false,
+        onChange: (v: number, _path: string, ctx: { fromPanel?: boolean }) => {
+          if (!ctx.fromPanel) return;
+          const t = zoomT.current;
+          shimmerSpikeAmpAnchor.current = t < 0.99 ? (v - 0.0 * t) / (1 - t) : v;
+        },
+      },
       shimmerSharpness: { value: 34.5, min: 1, max: 60, step: 0.5, label: "spike sharpness" },
       shimmerSlowFreq: { value: 0.2, min: 0, max: 5, step: 0.05, label: "slow freq" },
       shimmerSlowAmp: { value: 0.1, min: 0, max: 1, step: 0.01, label: "slow amp" },
       shimmerDepth: { value: 1.0, min: 0, max: 1, step: 0.01, label: "depth" },
     }),
     "Node bulge": folder({
-      nodeRadius: { value: 0.32, min: 0.05, max: 3, step: 0.01, label: "radius" },
-      nodeEmphRadius: { value: 0.35, min: 0.05, max: 4, step: 0.01, label: "focus radius" },
-      nodeBulgeSize: { value: 0.2, min: 0, max: 15, step: 0.1, label: "size boost" },
+      nodeRadius: { value: 0.06, min: 0.05, max: 3, step: 0.01, label: "radius" },
+      nodeEmphRadius: { value: 0.25, min: 0.05, max: 4, step: 0.01, label: "focus radius" },
+      nodeBulgeSize: { value: 0, min: 0, max: 15, step: 0.1, label: "size boost" },
       nodeColorMix: { value: 0, min: 0, max: 1, step: 0.01, label: "color mix" },
-      nodeBoost: { value: 1.55, min: 0, max: 10, step: 0.05, label: "brightness" },
+      nodeBoost: { value: 1, min: 0, max: 10, step: 0.05, label: "brightness" },
       nodeDriftBoost: { value: 0, min: 0, max: 20, step: 0.1, label: "drift boost" },
       nodeSwirlStrength: { value: 0, min: 0, max: 2, step: 0.01, label: "swirl amp" },
       nodeSwirlSpeed: { value: 0, min: 0, max: 10, step: 0.05, label: "swirl speed" },
-      nodeGravity: { value: 0, min: -1, max: 1, step: 0.01, label: "radial bias" },
+      nodeGravity: { value: -0.06, min: -1, max: 1, step: 0.01, label: "radial bias" },
       nodeCenterGravity: { value: 0, min: -2, max: 2, step: 0.01, label: "center pull" },
-      nodeCoreStrength: { value: 4.0, min: 0, max: 20, step: 0.1, label: "core spike" },
+      nodeCoreStrength: { value: 0, min: 0, max: 20, step: 0.1, label: "core spike" },
     }),
     Wind: folder({
       windX: { value: 0.6, min: -1, max: 1, step: 0.05, label: "x" },
@@ -166,9 +255,9 @@ export function ParticleField({
       windSpeed: { value: 0.3, min: 0, max: 3, step: 0.05, label: "gust speed" },
     }),
     Glints: folder({
-      glintRatio: { value: 0, min: 0, max: 1, step: 0.01, label: "ratio" },
-      glintSizeMult: { value: 2.0, min: 1, max: 12, step: 0.1, label: "size mult" },
-      glintIntensity: { value: 3.6, min: 1, max: 30, step: 0.1, label: "intensity" },
+      glintRatio: { value: 0.03, min: 0, max: 1, step: 0.01, label: "ratio" },
+      glintSizeMult: { value: 4, min: 1, max: 12, step: 0.1, label: "size mult" },
+      glintIntensity: { value: 1, min: 1, max: 30, step: 0.1, label: "intensity" },
       glintTint: { value: "#ffd9a0", label: "tint" },
     }),
     Grain: folder({
@@ -218,26 +307,51 @@ export function ParticleField({
     const seed = new Float32Array(particleCount);
     const fromCrisis = new Float32Array(particleCount);
     const toCrisis = new Float32Array(particleCount);
+    // Per-stream values: all particles assigned to the same stream share these
+    // so they emerge from a consistent point on the curve's cross-section.
     const radialAngle = new Float32Array(particleCount);
     const radialRadius = new Float32Array(particleCount);
+    const streamId = new Float32Array(particleCount);
 
+    // Streams are global (not per-edge) so noise sampling is distinct between
+    // edges. We accumulate a global counter as we lay out edges.
+    let globalStreamId = 0;
     let p = 0;
     timeline.edges.forEach((edge, idx) => {
       const share = Math.round((edge.weight / totalWeight) * particleCount);
+      // Cap streams at the share — empty streams would just waste id-space.
+      const streamCount = Math.max(1, Math.min(streamsPerEdge, share));
       const fc = edge.fromKind === "crisis" ? 1 : 0;
       const tc = edge.toKind === "crisis" ? 1 : 0;
       const speedBase = edge.toKind === "crisis" || edge.fromKind === "crisis" ? 0.045 : 0.06;
-      for (let k = 0; k < share && p < particleCount; k++, p++) {
-        curveIndex[p] = idx;
-        phase[p] = Math.random();
-        speed[p] = speedBase * (0.6 + Math.random() * 0.9);
-        seed[p] = Math.random() * 1000;
-        fromCrisis[p] = fc;
-        toCrisis[p] = tc;
-        radialAngle[p] = Math.random() * Math.PI * 2;
-        // sqrt for uniform area distribution across the disc cross-section
-        // (otherwise particles cluster near the axis).
-        radialRadius[p] = Math.sqrt(Math.random());
+      // Distribute the edge's particle share evenly across streams, with the
+      // remainder spilled into the first few streams.
+      const perStream = Math.floor(share / streamCount);
+      const remainder = share - perStream * streamCount;
+      // Pick one speed per edge so wisps don't smear (different speeds within
+      // a stream would stretch the filament apart). Random spread per-edge
+      // keeps inter-edge motion lively.
+      const edgeSpeed = speedBase * (0.6 + Math.random() * 0.9);
+      for (let sIdx = 0; sIdx < streamCount; sIdx++) {
+        const sid = globalStreamId++;
+        // Stream-anchor: where on the tube cross-section this wisp emanates
+        // from. Shared by every particle in the stream so they start aligned.
+        const sAngle = Math.random() * Math.PI * 2;
+        const sRadius = Math.sqrt(Math.random());
+        const count = perStream + (sIdx < remainder ? 1 : 0);
+        for (let k = 0; k < count && p < particleCount; k++, p++) {
+          curveIndex[p] = idx;
+          // Phases evenly staggered + slight jitter — staggered so the wisp
+          // is continuously populated, jittered so it doesn't beat in lockstep.
+          phase[p] = (k / Math.max(1, count) + Math.random() * 0.03) % 1;
+          speed[p] = edgeSpeed;
+          seed[p] = Math.random() * 1000;
+          fromCrisis[p] = fc;
+          toCrisis[p] = tc;
+          radialAngle[p] = sAngle;
+          radialRadius[p] = sRadius;
+          streamId[p] = sid;
+        }
       }
     });
     while (p < particleCount) {
@@ -249,6 +363,7 @@ export function ParticleField({
       toCrisis[p] = 0;
       radialAngle[p] = Math.random() * Math.PI * 2;
       radialRadius[p] = Math.sqrt(Math.random());
+      streamId[p] = globalStreamId;
       p++;
     }
 
@@ -262,9 +377,10 @@ export function ParticleField({
     geom.setAttribute("aToCrisis", new THREE.BufferAttribute(toCrisis, 1));
     geom.setAttribute("aRadialAngle", new THREE.BufferAttribute(radialAngle, 1));
     geom.setAttribute("aRadialRadius", new THREE.BufferAttribute(radialRadius, 1));
+    geom.setAttribute("aStreamId", new THREE.BufferAttribute(streamId, 1));
     geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 100);
     return geom;
-  }, [timeline, particleCount]);
+  }, [timeline, particleCount, streamsPerEdge]);
 
   // Build the uniforms object once per material lifetime — values are mutated
   // in place when the leva controls change so the shader updates live without
@@ -282,9 +398,21 @@ export function ParticleField({
       uCurveTexHeight: { value: 1 },
       uPointSize: { value: 1 },
       uTubeRadius: { value: 0 },
-      uDriftAmp: { value: 0 },
-      uDriftScale: { value: 1 },
-      uDriftCoherence: { value: 0 },
+      uWispAmp: { value: 0 },
+      uWispStretch: { value: 1 },
+      uWispMorphSpeed: { value: 0 },
+      uEdgeFlowSpread: { value: 1 },
+      uStreamPerturb: { value: 0 },
+      uGustAmp: { value: 0 },
+      uGustSpeed: { value: 0 },
+      uWispOctave: { value: 0 },
+      uPinEnds: { value: 0 },
+      uNodeVolume: { value: 0 },
+      uBunchFreq: { value: 0 },
+      uBunchContrast: { value: 0 },
+      uBunchTime: { value: 0 },
+      uStreakAmp: { value: 0 },
+      uMinPointSize: { value: 1 },
       uSpeedScale: { value: 1 },
       uIntensity: { value: 0.1 },
       uResolution: { value: new THREE.Vector2(1, 1) },
@@ -364,9 +492,21 @@ export function ParticleField({
   useEffect(() => {
     uniforms.uPointSize.value = pointSize;
     uniforms.uTubeRadius.value = tubeRadius;
-    uniforms.uDriftAmp.value = driftAmp;
-    uniforms.uDriftScale.value = driftScale;
-    uniforms.uDriftCoherence.value = driftCoherence;
+    uniforms.uWispAmp.value = wispAmp;
+    uniforms.uWispStretch.value = wispStretch;
+    uniforms.uWispMorphSpeed.value = wispMorphSpeed;
+    uniforms.uEdgeFlowSpread.value = edgeFlowSpread;
+    uniforms.uStreamPerturb.value = streamPerturb;
+    uniforms.uGustAmp.value = gustAmp;
+    uniforms.uGustSpeed.value = gustSpeed;
+    uniforms.uWispOctave.value = wispOctave;
+    uniforms.uPinEnds.value = pinEnds;
+    uniforms.uNodeVolume.value = nodeVolume;
+    uniforms.uBunchFreq.value = bunchFreq;
+    uniforms.uBunchContrast.value = bunchContrast;
+    uniforms.uBunchTime.value = bunchTime;
+    uniforms.uStreakAmp.value = streakAmp;
+    uniforms.uMinPointSize.value = minPointSize;
     uniforms.uSpeedScale.value = speedScale;
     uniforms.uIntensity.value = intensity;
     uniforms.uShimmerSpikeFreq.value = shimmerSpikeFreq;
@@ -398,7 +538,7 @@ export function ParticleField({
     uniforms.uGrainCore.value = grainCore;
     uniforms.uGrainHalo.value = grainHalo;
     uniforms.uGrainHaloAmp.value = grainHaloAmp;
-  }, [uniforms, pointSize, tubeRadius, driftAmp, driftScale, driftCoherence, speedScale, intensity, shimmerSpikeFreq, shimmerSpikeAmp, shimmerSharpness, shimmerSlowFreq, shimmerSlowAmp, shimmerDepth, stableColor, crisisColor, nodeRadius, nodeEmphRadius, nodeBulgeSize, nodeColorMix, nodeBoost, nodeDriftBoost, nodeSwirlStrength, nodeSwirlSpeed, nodeGravity, nodeCenterGravity, nodeCoreStrength, windX, windY, windZ, windStrength, windSpeed, glintRatio, glintSizeMult, glintIntensity, glintTint, grainCore, grainHalo, grainHaloAmp]);
+  }, [uniforms, pointSize, tubeRadius, wispAmp, wispStretch, wispMorphSpeed, edgeFlowSpread, streamPerturb, gustAmp, gustSpeed, wispOctave, pinEnds, nodeVolume, bunchFreq, bunchContrast, bunchTime, streakAmp, minPointSize, speedScale, intensity, shimmerSpikeFreq, shimmerSpikeAmp, shimmerSharpness, shimmerSlowFreq, shimmerSlowAmp, shimmerDepth, stableColor, crisisColor, nodeRadius, nodeEmphRadius, nodeBulgeSize, nodeColorMix, nodeBoost, nodeDriftBoost, nodeSwirlStrength, nodeSwirlSpeed, nodeGravity, nodeCenterGravity, nodeCoreStrength, windX, windY, windZ, windStrength, windSpeed, glintRatio, glintSizeMult, glintIntensity, glintTint, grainCore, grainHalo, grainHaloAmp]);
 
   useEffect(() => {
     uniforms.uResolution.value.set(size.width, size.height);
@@ -417,23 +557,35 @@ export function ParticleField({
     const t = THREE.MathUtils.clamp((dist - 2) / (60 - 2), 0, 1);
     zoomT.current = t;
     const nextPointSize = THREE.MathUtils.lerp(pointSizeAnchor.current, 30.0, t);
-    // Intensity uses a cubic ease-out: drops quickly off the zoomed-in anchor
-    // and then approaches the wide-shot value slowly through the middle and
-    // late zoom range. The same curve is applied in onChange so panel drags
-    // continue to "stick" at the current zoom.
+    // Linear: spike-amp fades from anchor at zoom-in down to 0 at zoom-out.
+    const nextSpikeAmp = THREE.MathUtils.lerp(shimmerSpikeAmpAnchor.current, 0, t);
+    // Cubic ease-out: drops quickly off the zoomed-in anchor and then
+    // approaches the wide-shot value slowly through the middle and late
+    // zoom range. The same curve is applied in each control's onChange so
+    // panel drags "stick" at the current zoom. Used by `intensity` and
+    // `minPointSize`.
     const inv = 1 - t;
-    const tIntensity = 1 - inv * inv * inv;
-    const nextIntensity = THREE.MathUtils.lerp(intensityAnchor.current, 0.3, tIntensity);
+    const tCurved = 1 - inv * inv * inv;
+    const nextIntensity = THREE.MathUtils.lerp(intensityAnchor.current, 0.15, tCurved);
+    const nextMinPx = THREE.MathUtils.lerp(minPointSizeAnchor.current, 1.5, tCurved);
     uniforms.uPointSize.value = nextPointSize;
     uniforms.uIntensity.value = nextIntensity;
+    uniforms.uMinPointSize.value = nextMinPx;
+    uniforms.uShimmerSpikeAmp.value = nextSpikeAmp;
     // Only push to leva when the value actually moved — avoids re-rendering
     // (and re-running the leva-watch effect) every frame while the camera is
-    // still. 1e-4 is below the slider step for both controls.
+    // still. 1e-4 is below the slider step for these controls.
     if (Math.abs(nextPointSize - pointSize) > 1e-4) {
       setParticles({ pointSize: nextPointSize });
     }
     if (Math.abs(nextIntensity - intensity) > 1e-4) {
       setParticles({ intensity: nextIntensity });
+    }
+    if (Math.abs(nextMinPx - minPointSize) > 1e-4) {
+      setParticles({ minPointSize: nextMinPx });
+    }
+    if (Math.abs(nextSpikeAmp - shimmerSpikeAmp) > 1e-4) {
+      setParticles({ shimmerSpikeAmp: nextSpikeAmp });
     }
   });
 

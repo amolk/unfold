@@ -13,9 +13,48 @@ uniform sampler2D uEdgeFades;   // 1×N texture, R = current per-edge fade (0..1
 uniform float uCurveTexWidth;   // samples per curve
 uniform float uCurveTexHeight;  // number of curves
 uniform float uPointSize;
-uniform float uDriftAmp;
-uniform float uDriftScale;
-uniform float uDriftCoherence; // 0 = chaotic per-particle, 1 = position-locked
+// Wisp formulation: particles are grouped into streams (aStreamId), and the
+// displacement from the curve spine is sampled from a 3D noise volume indexed
+// by (streamId, age, time). Adjacent ages within a stream → adjacent positions
+// → particles in a stream form a coherent filament. Time advances the noise
+// slowly so the filament curves morph over time without any per-particle
+// integration.
+uniform float uWispAmp;            // overall wisp displacement amplitude
+uniform float uWispStretch;        // how fast wind varies along age (curl tightness)
+uniform float uWispMorphSpeed;     // how fast the wisp paths evolve over time
+uniform float uEdgeFlowSpread;     // noise distance between adjacent edges' wind regimes
+uniform float uStreamPerturb;      // per-thread variation as a fraction of wisp amp
+uniform float uGustAmp;            // amplitude of time-varying wind strength
+uniform float uGustSpeed;          // rate of wind-strength variation
+uniform float uWispOctave;         // amplitude of a second finer octave (0 = single octave)
+// Endpoint pinning: the wisp displacement is multiplied by a pinch that goes
+// to 0 at life=0 and life=1, so threads converge to the curve spine at the
+// nodes. Multiple segments meeting at a node then visibly tie together at
+// that point instead of fraying. uPinEnds = 0 disables the pinch.
+uniform float uPinEnds;
+// Node volume: as the pinch closes the wisp at an endpoint, each stream is
+// instead anchored at a small stable per-stream offset around the spine
+// point. Threads converge into a 3D ball at the node rather than a single
+// mathematical point. Deterministic from aStreamId so the ball is stable
+// in time (no shimmer) and consistent across particles in the stream.
+uniform float uNodeVolume;
+// Variable-frequency emission: per-particle alpha is gated by a 3D noise
+// keyed on (streamId, life * uBunchFreq, time * uBunchTime). Peaks of the
+// noise → bursts of visible particles; valleys → gaps. The third axis lets
+// the rhythm pattern itself drift over real time.
+uniform float uBunchFreq;
+uniform float uBunchContrast;      // 0 = no gating (uniform), 1 = full gate
+uniform float uBunchTime;          // how fast the bunch pattern drifts in time
+// Motion-blur stretch: each point sprite is enlarged along the screen-space
+// curve tangent so the particle reads as a short streak rather than a dot.
+// 0 = round, higher = longer streak.
+uniform float uStreakAmp;
+// Sub-pixel shimmer guard. When gl_PointSize drops below ~1 pixel the
+// rasterizer's coverage decision flips frame-to-frame, producing visible
+// flicker that the additive blending + bloom amplifies. We clamp the size
+// at this floor and dim the alpha by the squared coverage ratio so smaller
+// intent reads as "dimmer", not "stuttering".
+uniform float uMinPointSize;
 uniform float uTubeRadius;
 uniform float uSpeedScale;
 uniform vec2  uResolution;
@@ -65,14 +104,24 @@ attribute float aSpeed;
 attribute float aSeed;
 attribute float aFromCrisis;
 attribute float aToCrisis;
-attribute float aRadialAngle;
-attribute float aRadialRadius;
+attribute float aRadialAngle;   // per-stream (all particles in a stream share this)
+attribute float aRadialRadius;  // per-stream
+attribute float aStreamId;      // unique id of the stream this particle belongs to
 
 varying float vAlpha;
 varying float vKindMix;
 varying float vNodeProx;
 varying vec3  vNodeCol;
 varying float vIsGlint;
+varying float vStreamId;        // forwarded so the fragment shader can pick a pigment later
+// Screen-space direction of the particle's motion (unit vector in gl_PointCoord
+// space — y is inverted relative to NDC). Used by the fragment shader to align
+// the elongated streak shape with the motion direction.
+varying vec2  vScreenTangent;
+// How much the point sprite has been stretched along the screen tangent. The
+// fragment shader uses this to compress the perpendicular axis so the visible
+// ellipse stays narrow even though the sprite quad is enlarged.
+varying float vStreakFactor;
 
 // --- compact 3D value noise -----------------------------------------------
 vec3 hash3(vec3 p) {
@@ -103,17 +152,73 @@ float vnoise(vec3 x) {
   );
 }
 
-vec3 driftField(vec3 p, float seed) {
-  float s = uDriftScale;
-  // Coherence: shrink the per-particle seed offset toward 0 so adjacent
-  // particles sample the same noise direction and form visible streams.
-  float spread = 1.0 - uDriftCoherence;
-  vec3 q = p * s + vec3(seed * 13.37 * spread, seed * 7.13 * spread, uTime * 0.18);
+// Wisp displacement = dominant edge-local wind  +  small per-stream detail.
+//
+// The wind field is keyed on (curveIdx, age, time), NOT on streamId — so
+// every particle on the same edge at the same age samples the same wind
+// vector. That gives neighboring threads a shared contour: they bend
+// together, which is what makes a cluster of threads read as a single
+// smoke wisp instead of an uncorrelated jumble.
+//
+// Adjacent edges sit a small step apart in the curveIdx axis of the noise,
+// so the wind on a neighboring branch resembles the wind on this one —
+// regional coherence, not edge-local randomness.
+//
+// The age axis is what gives a wisp its curvature: as a particle ages, the
+// wind direction it sees drifts, so the trail of particles strings out
+// along a curving path. Time advances slowly on the third axis so the
+// wisp shape itself morphs in place.
+//
+//   curveIdx           → which edge's local wind regime (adjacent → similar)
+//   age (= life [0,1]) → position along the wisp; drives curvature
+//   uTime              → slow morph of the wisp curve over real time
+vec3 windField(float curveIdx, float age, float t) {
+  vec3 q = vec3(
+    curveIdx * uEdgeFlowSpread,
+    age * uWispStretch,
+    t * uWispMorphSpeed
+  );
+  vec3 a = vec3(
+    vnoise(q),
+    vnoise(q + vec3(31.4,  0.0,  0.0)),
+    vnoise(q + vec3( 0.0, 17.2,  0.0))
+  );
+  // Fine octave: subtle spatial detail along the wisp's length.
+  vec3 b = vec3(
+    vnoise(q * 2.3 + vec3( 5.1,  0.0,  0.0)),
+    vnoise(q * 2.3 + vec3(31.4 + 5.1, 0.0, 0.0)),
+    vnoise(q * 2.3 + vec3( 0.0, 17.2 + 5.1, 0.0))
+  );
+  return a + b * uWispOctave;
+}
+
+// Per-stream perturbation: a small unique offset per thread so adjacent
+// threads in the same wisp don't perfectly overlap. Kept much smaller than
+// the wind itself — the wind decides the contour, the perturbation adds
+// thread identity.
+vec3 streamDetail(float streamId, float age, float t) {
+  vec3 q = vec3(
+    streamId * 7.31,
+    age * uWispStretch * 1.4,
+    t * uWispMorphSpeed * 1.7
+  );
   return vec3(
     vnoise(q),
-    vnoise(q + vec3(31.4, 0.0, 0.0)),
-    vnoise(q + vec3(0.0, 17.2, 0.0))
+    vnoise(q + vec3(31.4,  0.0,  0.0)),
+    vnoise(q + vec3( 0.0, 17.2,  0.0))
   );
+}
+
+vec3 wispOffset(float curveIdx, float streamId, float age, float t) {
+  // Gust: the wind's strength is not constant. A low-frequency noise on time
+  // (with a faint curve-id component so different parts of the tree don't
+  // gust in perfect lockstep) modulates the wind amplitude. This produces
+  // the "pushes sideways sometimes" feel — the wisp lulls and lurches
+  // instead of swaying at uniform speed.
+  float gust = 1.0 + uGustAmp * vnoise(vec3(t * uGustSpeed, curveIdx * 0.31, 0.0));
+  vec3 wind = windField(curveIdx, age, t) * uWispAmp * gust;
+  vec3 detail = streamDetail(streamId, age, t) * uWispAmp * uStreamPerturb;
+  return wind + detail;
 }
 
 vec4 nodePosFade(int i) {
@@ -136,19 +241,45 @@ vec3 sampleCurve(float idx, float t) {
 }
 
 void main() {
+  vStreamId = aStreamId;
   float life = fract(aPhase + uTime * aSpeed * uSpeedScale);
   float fadeIn  = smoothstep(0.0, 0.02, life);
   float fadeOut = smoothstep(0.0, 0.02, 1.0 - life);
 
   // Glitter shimmer:
   //   intensity = baseline + spike
-  // Baseline is 1.0 plus an optional slow gentle wave. Spike fires only on
-  // the positive half of a sine, raised to a high power so it's flat most of
-  // the time with brief sharp peaks. Each particle has its own phase.
+  // Baseline is 1.0 plus an optional slow gentle wave.
+  //
+  // The spike is a discrete event model: each particle fires a flash at
+  // moments spaced ~1/uShimmerSpikeFreq seconds apart, and the flash decays
+  // exponentially with a time constant set ONLY by uShimmerSharpness (not
+  // by spike frequency). Dropping uShimmerSpikeFreq produces fewer total
+  // glints without slowing each individual flash.
+  //
+  //   sharpness ≈  1 → ~700 ms half-life (soft swell)
+  //   sharpness ≈ 10 → ~70  ms half-life (snappy)
+  //   sharpness ≈ 35 → ~20  ms half-life (sharp quick reflection)
+  //
+  // Critically, each particle's *rate* is jittered around uShimmerSpikeFreq
+  // (deterministic hash of aSeed). Without this jitter, every particle
+  // would re-fire on the same global period — even with uniform phase
+  // offsets the field reads as faintly synchronized, because each
+  // particle's cadence is identical. With per-particle freq jitter, phases
+  // drift apart continuously and no global beat exists.
   float slowOsc  = sin(uTime * uShimmerSlowFreq + aSeed * 7.13);
   float baseline = 1.0 + uShimmerSlowAmp * slowOsc;
-  float spikeRaw = sin(uTime * uShimmerSpikeFreq + aSeed * 31.4);
-  float spike    = pow(max(0.0, spikeRaw), uShimmerSharpness) * uShimmerSpikeAmp;
+  // Two hashes off aSeed: one for the firing phase, one for the per-particle
+  // rate jitter. sin/fract is the standard cheap GLSL hash.
+  float h1 = fract(sin(aSeed * 78.233) * 43758.5453);
+  float h2 = fract(sin(aSeed * 12.989 + 4.21) * 43758.5453);
+  // Symmetric jitter (0.6× .. 1.4× the slider value) → mean firing rate
+  // stays close to what the slider says, no two particles share a clock.
+  float perParticleFreq = max(uShimmerSpikeFreq * mix(0.6, 1.4, h2), 0.0001);
+  // fract(...)/freq is the seconds elapsed since this particle's last spike
+  // event — exponential decay over real time, not over phase.
+  float spikePhase = uTime * perParticleFreq + h1;
+  float secondsSinceSpike = fract(spikePhase) / perParticleFreq;
+  float spike = exp(-secondsSinceSpike * uShimmerSharpness) * uShimmerSpikeAmp;
   float shimmerIntensity = baseline + spike;
   vAlpha = fadeIn * fadeOut * mix(1.0, shimmerIntensity, uShimmerDepth);
 
@@ -169,6 +300,26 @@ void main() {
   float entryAlpha = pow(smoothstep(0.0, 1.0, life), 2.2);
   vAlpha *= mix(1.0, entryAlpha, entryRamp);
 
+  // Bursty emission: gate alpha by a 3D noise indexed on (streamId, life,
+  // time). Peaks of the noise are "bursts" along the stream (bright clumps),
+  // valleys are "gaps" (dark). All particles in the stream share the noise
+  // function, so the bunches read as coherent clumps moving through the wisp
+  // rather than per-particle flicker. The third axis lets the bunch pattern
+  // itself drift over real time.
+  if (uBunchContrast > 0.001) {
+    float bunchN = vnoise(vec3(
+      aStreamId * 2.13,
+      life * uBunchFreq + aStreamId * 0.71,
+      uTime * uBunchTime
+    ));
+    float gate = clamp(0.5 + 0.5 * bunchN, 0.0, 1.0);
+    // Sharpen the gate so bursts read as clear "dots" vs "gaps" rather than
+    // a uniform haze — the contrast control feeds both how much we modulate
+    // and how steep the cutoff is.
+    gate = smoothstep(0.5 - 0.5 * uBunchContrast, 0.5 + 0.5 * uBunchContrast, gate);
+    vAlpha *= mix(1.0, gate, uBunchContrast);
+  }
+
   vKindMix = mix(aFromCrisis, aToCrisis, life);
 
   // Local tangent → perpendicular basis → place particle at (angle, radius)
@@ -188,8 +339,29 @@ void main() {
   float r = aRadialRadius * uTubeRadius * radWobble;
   vec3 tubeOffset = (cos(aRadialAngle) * b1 + sin(aRadialAngle) * b2) * r;
 
-  vec3 drift = driftField(base, aSeed) * uDriftAmp;
-  vec3 pos = base + tubeOffset + drift;
+  // Wisp displacement: every particle on the same edge at the same age sees
+  // the same dominant wind, so adjacent streams curve together into one
+  // visible wisp. A small per-stream perturbation keeps individual threads
+  // distinct within the wisp.
+  vec3 drift = wispOffset(aCurveIndex, aStreamId, life, uTime);
+  // Endpoint pinch: collapse the off-spine displacement at life=0 and life=1
+  // so threads visibly converge at the nodes. The pinch is a product of two
+  // smoothsteps rising over the first/last uPinEnds fraction of life.
+  float pinch = uPinEnds > 0.001
+    ? smoothstep(0.0, uPinEnds, life) * smoothstep(0.0, uPinEnds, 1.0 - life)
+    : 1.0;
+  // Node volume: as the pinch closes (pinch → 0), each stream is parked at
+  // a small stable per-stream offset around the spine. The three components
+  // are independent noise samples of aStreamId — deterministic in time, so
+  // the ball doesn't shimmer; different per stream, so threads fill the
+  // ball instead of stacking on one point. Streams from other segments
+  // converging at the same world position add more particles to the ball.
+  vec3 nodeBlob = vec3(
+    vnoise(vec3(aStreamId * 1.71,  1.3, 0.0)),
+    vnoise(vec3(aStreamId * 1.71,  7.1, 0.0)),
+    vnoise(vec3(aStreamId * 1.71, 13.7, 0.0))
+  ) * uNodeVolume;
+  vec3 pos = base + (tubeOffset + drift) * pinch + nodeBlob * (1.0 - pinch);
 
   // --- node proximity / bulge / motion ---------------------------------
   // One pass per node: accumulate Gaussian proximity (for the bulge tint and
@@ -241,10 +413,12 @@ void main() {
   vNodeProx = prox;
   vNodeCol = colWeight > 0.0001 ? colSum / colWeight : vec3(1.0);
 
-  // Extra drift turbulence scales with bulge proximity, so streams "puff out"
-  // near nodes.
-  vec3 nearDrift = driftField(pos + vec3(uTime * 0.4, 0.0, 0.0), aSeed * 1.7)
-                   * uDriftAmp * uNodeDriftBoost * prox;
+  // Extra wisp turbulence near nodes — pass a perturbed curve/stream/age so
+  // the near-node puffing reads as additional curl on top of the main
+  // filament path, not a clone of it. Pinched the same way so the endpoint
+  // convergence isn't undone by the near-node turbulence boost.
+  vec3 nearDrift = wispOffset(aCurveIndex + 3.7, aStreamId + 11.3, life + 0.27, uTime * 1.7)
+                   * uNodeDriftBoost * prox * pinch;
   pos += nodeWarp + nearDrift;
 
   // Global wind: a single direction modulated by slow gusts. Same offset for
@@ -264,6 +438,40 @@ void main() {
   float dist = max(-mv.z, 0.0001);
   // Glint particles get bigger so they read as defined pinpricks under bloom.
   float glintBoost = mix(1.0, uGlintSizeMult, vIsGlint);
-  gl_PointSize = uPointSize * (10.0 / dist) * (1.0 + uNodeBulgeSize * prox) * glintBoost;
+  float baseSize = uPointSize * (10.0 / dist) * (1.0 + uNodeBulgeSize * prox) * glintBoost;
+
+  // --- motion-blur streak --------------------------------------------------
+  // Project the world-space curve tangent into screen space; that direction
+  // is where the particle is heading. We enlarge the point sprite by
+  // streakFactor along this axis, and the fragment shader compresses the
+  // perpendicular axis by the same factor — so the visible region inside
+  // the (now larger) sprite is an ellipse aligned with motion.
+  if (uStreakAmp > 0.001) {
+    vec4 mvT = modelViewMatrix * vec4(pos + tangent * 0.05, 1.0);
+    vec4 clT = projectionMatrix * mvT;
+    vec2 ndcHere = gl_Position.xy / max(gl_Position.w, 1e-4);
+    vec2 ndcT    = clT.xy / max(clT.w, 1e-4);
+    // NDC y is up; gl_PointCoord y is down. Flip y so the varying is in the
+    // same frame the fragment shader's gl_PointCoord uses.
+    vec2 screenDir = vec2((ndcT.x - ndcHere.x), -(ndcT.y - ndcHere.y)) * uResolution;
+    float L = length(screenDir);
+    vScreenTangent = L > 1e-4 ? screenDir / L : vec2(1.0, 0.0);
+    vStreakFactor = 1.0 + uStreakAmp;
+  } else {
+    vScreenTangent = vec2(1.0, 0.0);
+    vStreakFactor = 1.0;
+  }
+
+  // Sub-pixel shimmer guard. The intended sprite size (post-streak) might
+  // drop below 1 pixel as the camera pulls back or the user picks a tiny
+  // point size; in that regime the rasterizer's coverage decision flips
+  // per-frame and the particle visibly stutters. Clamp the actual size at
+  // uMinPointSize and dim the alpha by the squared coverage ratio so the
+  // intended energy is preserved while the rendering stays stable.
+  float intendedSize = baseSize * vStreakFactor;
+  float floorPx = max(uMinPointSize, 1.0);
+  float coverage = clamp(intendedSize / floorPx, 0.0, 1.0);
+  vAlpha *= coverage * coverage;
+  gl_PointSize = max(intendedSize, floorPx);
 }
 `;
