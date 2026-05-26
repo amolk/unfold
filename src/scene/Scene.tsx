@@ -58,7 +58,7 @@ export function Scene() {
     set,
   ] = useControls("Explorer", () => ({
       mode: {
-        value: "single-path" as ExplorerMode,
+        value: "full-tree" as ExplorerMode,
         options: {
           "single path": "single-path",
           "toggle expand": "toggle",
@@ -66,7 +66,7 @@ export function Scene() {
         },
         label: "mode",
       },
-      seed: { value: 7, min: 1, max: 9999, step: 1 },
+      seed: { value: 9143, min: 1, max: 9999, step: 1 },
       regenerate: button(() => set({ seed: Math.floor(Math.random() * 9999) })),
       "copy settings": button(() => {
         // Dump every current value across all folders to clipboard as JSON.
@@ -87,7 +87,7 @@ export function Scene() {
       cameraEase: { value: 0.005, min: 0.005, max: 0.2, step: 0.005, label: "camera ease" },
       fadeSpeed: { value: 2.0, min: 0.3, max: 10, step: 0.1, label: "fade speed" },
       sphereOpacity: {
-        value: 0,
+        value: 0.07,
         min: 0,
         max: 1,
         step: 0.01,
@@ -200,7 +200,11 @@ export function Scene() {
         existing.target = 1;
         existing.node = n;
       } else {
-        activeRef.current.nodes.set(n.id, { node: n, target: 1, fade: 0, index: -1 });
+        // Spheres pop in at full size — initial fade = 1 instead of 0 so the
+        // vertex shader's `position * aInstanceScale * aInstanceFade` lands
+        // at full radius on the first frame. Departure animation still works
+        // (target=0 ramps fade 1→0 and the sphere shrinks out).
+        activeRef.current.nodes.set(n.id, { node: n, target: 1, fade: 1, index: -1 });
         topologyChanged = true;
       }
     };

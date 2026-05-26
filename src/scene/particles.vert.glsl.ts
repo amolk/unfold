@@ -27,11 +27,17 @@ uniform float uStreamPerturb;      // per-thread variation as a fraction of wisp
 uniform float uGustAmp;            // amplitude of time-varying wind strength
 uniform float uGustSpeed;          // rate of wind-strength variation
 uniform float uWispOctave;         // amplitude of a second finer octave (0 = single octave)
-// Endpoint pinning: the wisp displacement is multiplied by a pinch that goes
-// to 0 at life=0 and life=1, so threads converge to the curve spine at the
-// nodes. Multiple segments meeting at a node then visibly tie together at
-// that point instead of fraying. uPinEnds = 0 disables the pinch.
-uniform float uPinEnds;
+// Endpoint pinning: the wisp displacement is multiplied by a pinch that
+// rises from 0 to 1 over the first uPinHead fraction of life, and falls
+// from 1 to 0 over the last uPinTail fraction. Splitting head/tail lets
+// the tail bloom out (small uPinTail) while still keeping the head tied
+// into its source node. Either set to 0 disables that side's pinch.
+uniform float uPinHead;
+uniform float uPinTail;
+// Tail bloom: scales the wisp drift amplitude as a function of life, so the
+// trailing end of each segment fans out wider than the head — matches the
+// "sand peeling off a brush tip" reference look. 0 = uniform amplitude.
+uniform float uTailBloom;
 // Node volume: as the pinch closes the wisp at an endpoint, each stream is
 // instead anchored at a small stable per-stream offset around the spine
 // point. Threads converge into a 3D ball at the node rather than a single
@@ -104,6 +110,13 @@ uniform float uWindSpeed;
 uniform float uGlintRatio;
 uniform float uGlintSizeMult;
 
+// Palette zone size: average distance (in stream-id units) over which the
+// palette bucket varies. Smaller = larger color zones spanning many adjacent
+// streams (whole branches tend to be one pigment). Larger = palette flips
+// more often, approaching salt-and-pepper at ~1.0. The clustering also has
+// a smaller per-edge axis so adjacent edges drift in related palettes.
+uniform float uPaletteZoneScale;
+
 attribute float aCurveIndex;
 attribute float aPhase;
 attribute float aSpeed;
@@ -120,6 +133,10 @@ varying float vNodeProx;
 varying vec3  vNodeCol;
 varying float vIsGlint;
 varying float vStreamId;        // forwarded so the fragment shader can pick a pigment later
+// Discrete palette bucket for this particle's stream: 0=A (red, ~70%), 1=B
+// (blue, ~15%), 2=C (gold, ~15%). Deterministic from aStreamId so every
+// particle in a stream shares one pigment — woven sand-on-sand look.
+varying float vPaletteIdx;
 // Screen-space direction of the particle's motion (unit vector in gl_PointCoord
 // space — y is inverted relative to NDC). Used by the fragment shader to align
 // the elongated streak shape with the motion direction.
@@ -385,12 +402,16 @@ void main() {
   // visible wisp. A small per-stream perturbation keeps individual threads
   // distinct within the wisp.
   vec3 drift = wispOffset(aCurveIndex, aStreamId, life, uTime);
-  // Endpoint pinch: collapse the off-spine displacement at life=0 and life=1
-  // so threads visibly converge at the nodes. The pinch is a product of two
-  // smoothsteps rising over the first/last uPinEnds fraction of life.
-  float pinch = uPinEnds > 0.001
-    ? smoothstep(0.0, uPinEnds, life) * smoothstep(0.0, uPinEnds, 1.0 - life)
-    : 1.0;
+  // Tail bloom: scale drift amplitude up as life advances so the trailing
+  // half fans out wider than the head. smoothstep keeps the head clean.
+  drift *= 1.0 + uTailBloom * smoothstep(0.4, 1.0, life);
+  // Endpoint pinch: independent head/tail smoothsteps. Setting uPinTail
+  // small (or zero) lets the tail bloom out without the segment-end
+  // convergence pulling it back to the spine. uPinHead anchors the head
+  // so segments still tie cleanly into upstream nodes.
+  float headPinch = uPinHead > 0.001 ? smoothstep(0.0, uPinHead, life) : 1.0;
+  float tailPinch = uPinTail > 0.001 ? smoothstep(0.0, uPinTail, 1.0 - life) : 1.0;
+  float pinch = headPinch * tailPinch;
   // Node volume: as the pinch closes (pinch → 0), each stream is parked at
   // a small stable per-stream offset around the spine. The three components
   // are independent noise samples of aStreamId — deterministic in time, so
@@ -472,6 +493,23 @@ void main() {
   // grains; the rest are dim matte base. Pure aSeed derivation keeps the
   // partition stable for each particle.
   vIsGlint = step(1.0 - uGlintRatio, fract(aSeed * 0.0317 + 0.456));
+
+  // Palette bucket: discrete spatial zones. We chunk adjacent stream ids
+  // together — floor(streamId * uPaletteZoneScale) — so every stream in
+  // a zone shares one bucket, and each zone draws independently from a
+  // uniform hash. This preserves the 70/15/15 target weighting regardless
+  // of zone size, which a smooth-noise lookup did NOT: value noise clusters
+  // tightly around 0.5, so thresholds at 0.70 / 0.85 were almost never
+  // crossed and the field read as nearly pure palette A.
+  //
+  // uPaletteZoneScale semantics: 1 / streams-per-zone. So scale=0.1 means
+  // ~10 streams share a bucket; scale=1.0 reverts to per-stream random.
+  // Adjacent edges get different bucket sequences naturally because
+  // aStreamId is globally incremented across the geometry — no need for
+  // an explicit per-edge axis.
+  float zoneId = floor(aStreamId * uPaletteZoneScale);
+  float zHash = fract(sin(zoneId * 91.317 + 7.91) * 43758.5453);
+  vPaletteIdx = zHash < 0.70 ? 0.0 : (zHash < 0.85 ? 1.0 : 2.0);
 
   vec4 mv = modelViewMatrix * vec4(pos, 1.0);
   gl_Position = projectionMatrix * mv;

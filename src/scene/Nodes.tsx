@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame, type ThreeEvent } from "@react-three/fiber";
-import { useControls, folder } from "leva";
+import { type ThreeEvent } from "@react-three/fiber";
+import { useControls } from "leva";
 import * as THREE from "three";
 import { Timeline } from "../timeline/generate";
 import { nodesVert } from "./nodes.vert.glsl";
@@ -29,26 +29,14 @@ export function Nodes({
 
   const {
     nodeRadius,
-    crisisScale,
-    focusScale,
-    plasmaScale,
-    plasmaSpeed,
     rimStrength,
-    hotBoost,
     stableNodeColor,
     crisisNodeColor,
   } = useControls("Nodes", {
     nodeRadius: { value: 0.2, min: 0.02, max: 1.5, step: 0.01 },
-    crisisScale: { value: 1.6, min: 0.5, max: 4, step: 0.05 },
-    focusScale: { value: 1.8, min: 1, max: 4, step: 0.05 },
+    rimStrength: { value: 3, min: 0, max: 3, step: 0.05, label: "rim" },
     stableNodeColor: "#8CD0FF",
     crisisNodeColor: "#FFB060",
-    Plasma: folder({
-      plasmaScale: { value: 0.5, min: 0.1, max: 30, step: 0.1, label: "scale" },
-      plasmaSpeed: { value: 0.4, min: 0, max: 3, step: 0.05, label: "speed" },
-      rimStrength: { value: 0.9, min: 0, max: 3, step: 0.05, label: "rim" },
-      hotBoost: { value: 0.5, min: 0.1, max: 5, step: 0.05, label: "hot boost" },
-    }),
   });
 
   // Static per-instance buffers (colors, kinds) rebuilt when the visible set
@@ -110,8 +98,8 @@ export function Nodes({
     geom.setAttribute("aInstanceFade", fadeAttribute);
   }, [fadeAttribute]);
 
-  // Scale + emphasis depend on the focus, so they update independently when
-  // the user navigates without rebuilding the color/kind buffers.
+  // All nodes render at the same size; the focused node "lights up" instead
+  // (the fragment shader boosts body brightness and rim strength by vEmphasis).
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
@@ -119,12 +107,8 @@ export function Nodes({
     const scales = new Float32Array(n);
     const emphases = new Float32Array(n);
     for (let i = 0; i < n; i++) {
-      let s = timeline.nodes[i].kind === "crisis" ? crisisScale : 1;
-      if (i === focusedIndex) {
-        s *= focusScale;
-        emphases[i] = 1;
-      }
-      scales[i] = s;
+      scales[i] = 1;
+      emphases[i] = i === focusedIndex ? 1 : 0;
     }
     const geom = mesh.geometry as THREE.InstancedBufferGeometry;
     geom.setAttribute("aInstanceScale", new THREE.InstancedBufferAttribute(scales, 1));
@@ -132,16 +116,11 @@ export function Nodes({
       "aInstanceEmphasis",
       new THREE.InstancedBufferAttribute(emphases, 1),
     );
-  }, [timeline, focusedIndex, crisisScale, focusScale]);
+  }, [timeline, focusedIndex]);
 
   const uniforms = useMemo(
     () => ({
-      uTime: { value: 0 },
-      uPlasmaScale: { value: plasmaScale },
-      uPlasmaSpeed: { value: plasmaSpeed },
       uRimStrength: { value: rimStrength },
-      uHotBoost: { value: hotBoost },
-      uHotTint: { value: new THREE.Color(1.0, 0.9, 0.75) },
       uDarkTint: { value: new THREE.Color(0.25, 0.18, 0.15) },
       uOpacity: { value: 1 },
     }),
@@ -152,18 +131,9 @@ export function Nodes({
   useEffect(() => {
     const u = materialRef.current?.uniforms;
     if (!u) return;
-    u.uPlasmaScale.value = plasmaScale;
-    u.uPlasmaSpeed.value = plasmaSpeed;
     u.uRimStrength.value = rimStrength;
-    u.uHotBoost.value = hotBoost;
     u.uOpacity.value = sphereOpacity;
-  }, [plasmaScale, plasmaSpeed, rimStrength, hotBoost, sphereOpacity]);
-
-  useFrame((_, dt) => {
-    if (materialRef.current) {
-      materialRef.current.uniforms.uTime.value += dt;
-    }
-  });
+  }, [rimStrength, sphereOpacity]);
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     if (e.instanceId == null || !onSelectNode) return;
@@ -195,8 +165,14 @@ export function Nodes({
         uniforms={uniforms}
         vertexShader={nodesVert}
         fragmentShader={nodesFrag}
-        transparent
-        depthWrite={sphereOpacity > 0.01}
+        // NOT transparent — the fragment shader outputs alpha=1 always and
+        // only discards when uOpacity drops to 0. Three.js draws this in
+        // the opaque pass, which (combined with depthTest) gives correct
+        // inter-sphere ordering regardless of which instance rasterises
+        // first. The body acts as a full occluder for wisps behind it; to
+        // hide spheres entirely, set sphereOpacity to 0 (the discard then
+        // skips depth write so wisps pass through).
+        depthWrite
         depthTest
       />
     </instancedMesh>

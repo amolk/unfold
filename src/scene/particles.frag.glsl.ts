@@ -17,23 +17,49 @@ uniform float uGrainHalo;     // exponent for the halo
 uniform float uGrainHaloAmp;  // halo amplitude
 
 uniform float uGlintIntensity;
-uniform vec3  uGlintTint;
+
+// Woven multi-pigment palette: three categorical colors, picked per stream
+// in the vertex shader (vPaletteIdx). uWeaveAmount mixes the picked color
+// in over the base stable/crisis tint — 0 = no weaving (original behavior),
+// 1 = pure palette. Lets the field read as red ribbons with blue/gold
+// strands woven through rather than a single tint.
+uniform vec3  uPaletteA;
+uniform vec3  uPaletteB;
+uniform vec3  uPaletteC;
+uniform float uWeaveAmount;
 
 varying float vAlpha;
 varying float vKindMix;
 varying float vNodeProx;
 varying vec3  vNodeCol;
 varying float vIsGlint;
-// Stream identity, forwarded for the upcoming per-stream pigment palette.
-// Currently unused in the fragment shader — declared so the link matches
-// the vertex shader.
+// Stream identity, forwarded for downstream debugging — not currently read
+// here (the palette is selected via vPaletteIdx instead).
 varying float vStreamId;
+// Per-stream palette bucket: 0=A, 1=B, 2=C. See vertex shader for weights.
+varying float vPaletteIdx;
 // Screen-space tangent direction (gl_PointCoord frame, y-down) and the
 // stretch factor the vertex shader applied to gl_PointSize. The fragment
 // shader uses these to draw an elongated ellipse oriented along the
 // tangent inside the enlarged point sprite.
 varying vec2  vScreenTangent;
 varying float vStreakFactor;
+
+// Push an RGB color to full saturation while preserving hue. Standard
+// branchless HSV via Sam Hocevar's formulation; we then force S=1 and
+// reconstruct. Glints use this so the per-stream pigment reads at full
+// chroma — without it, woven palette colors look identical at glint scale.
+vec3 saturateHue(vec3 c) {
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  const float e = 1.0e-10;
+  vec3 hsv = vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), 1.0, q.x);
+  vec4 K2 = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+  vec3 pp = abs(fract(hsv.xxx + K2.xyz) * 6.0 - K2.www);
+  return hsv.z * mix(K2.xxx, clamp(pp - K2.xxx, 0.0, 1.0), hsv.y);
+}
 
 void main() {
   vec2 uv = gl_PointCoord * 2.0 - 1.0;
@@ -55,15 +81,25 @@ void main() {
   vec3 col = mix(uStableColor, uCrisisColor, smoothstep(0.0, 1.0, vKindMix));
   col *= 1.0 + 0.5 * vKindMix; // crisis particles run hotter
 
+  // Weave: blend in the stream's palette pigment over the stable/crisis base.
+  // Done before the node tint so node-near particles still take the node's
+  // color (consistent with the existing tint precedence).
+  vec3 paletteCol = vPaletteIdx < 0.5
+    ? uPaletteA
+    : (vPaletteIdx < 1.5 ? uPaletteB : uPaletteC);
+  col = mix(col, paletteCol, uWeaveAmount);
+
   // Near nodes, tint toward the node's color and crank brightness so the
   // accumulation reads as a glowing sphere and triggers bloom.
   float tint = clamp(vNodeProx, 0.0, 1.0) * uNodeColorMix;
   col = mix(col, vNodeCol, tint);
   a *= 1.0 + uNodeBoost * clamp(vNodeProx, 0.0, 4.0);
 
-  // Glint particles: tint toward a warm-white and multiply intensity so they
-  // pop into bright specular pinpricks through bloom.
-  col = mix(col, uGlintTint, vIsGlint * 0.6);
+  // Glint particles: push to full saturation so the per-stream pigment
+  // (woven palette) reads clearly at glint scale, and multiply intensity
+  // so they pop as bright pinpricks through bloom. Saturating preserves
+  // hue — a red stream's glints stay red, a cobalt stream's stay cobalt.
+  col = mix(col, saturateHue(col), vIsGlint);
   a *= mix(1.0, uGlintIntensity, vIsGlint);
 
   gl_FragColor = vec4(col * a, a);

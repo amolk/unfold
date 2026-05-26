@@ -10,7 +10,6 @@ attribute float aInstanceScale;
 attribute float aInstanceEmphasis; // 0 = normal, 1 = focused
 attribute float aInstanceFade;     // 0 = invisible, 1 = full size
 
-varying vec3 vWorldPos;
 varying vec3 vNormal;
 varying vec3 vViewDir;
 varying vec3 vInstColor;
@@ -22,7 +21,6 @@ void main() {
   vec3 scaled = position * aInstanceScale * aInstanceFade;
   vec4 worldPos = instanceMatrix * vec4(scaled, 1.0);
   worldPos = modelMatrix * worldPos;
-  vWorldPos = worldPos.xyz;
 
   // The instanceMatrix is translation-only here, so the normal is unchanged
   // by it; modelMatrix is also identity-ish for our group so the object-space

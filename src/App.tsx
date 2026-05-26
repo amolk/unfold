@@ -44,8 +44,8 @@ class Boundary extends React.Component<
 function BloomFx() {
   const { intensity, threshold, smoothing } = useControls("Bloom", {
     intensity: { value: 0.02, min: 0, max: 4, step: 0.01 },
-    threshold: { value: 0.13, min: 0, max: 1, step: 0.01 },
-    smoothing: { value: 0.85, min: 0, max: 1, step: 0.01 },
+    threshold: { value: 0, min: 0, max: 1, step: 0.01 },
+    smoothing: { value: 0.49, min: 0, max: 1, step: 0.01 },
   });
   return (
     <EffectComposer multisampling={0}>

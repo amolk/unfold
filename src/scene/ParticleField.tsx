@@ -51,8 +51,8 @@ export function ParticleField({
   // baseline that the lerp pivots around. When the user drags the slider
   // (fromPanel=true), we treat that as a new anchor. We also stash the most
   // recent zoom t so onChange can be evaluated in the correct context.
-  const intensityAnchor = useRef(4);
-  const pointSizeAnchor = useRef(2);
+  const intensityAnchor = useRef(3.25);
+  const pointSizeAnchor = useRef(4);
   // minPointSize anchor (zoomed-in baseline). The shimmer-guard floor lerps
   // from this value down to 1.5 at zoom-out, with a cubic ease-out — so the
   // floor drops off quickly from zoom-in and then hovers near 1.5 through
@@ -61,7 +61,7 @@ export function ParticleField({
   // Shimmer spike amplitude is zoom-driven, anchor at zoom-in → 0 at
   // zoom-out (linear). Glints are noticeable up close and fade out as the
   // camera pulls back to a wide shot.
-  const shimmerSpikeAmpAnchor = useRef(5);
+  const shimmerSpikeAmpAnchor = useRef(4.65);
   const zoomT = useRef(0);
 
   const [{
@@ -78,7 +78,9 @@ export function ParticleField({
     gustAmp,
     gustSpeed,
     wispOctave,
-    pinEnds,
+    pinHead,
+    pinTail,
+    tailBloom,
     nodeVolume,
     bunchFreq,
     bunchContrast,
@@ -116,10 +118,14 @@ export function ParticleField({
     glintRatio,
     glintSizeMult,
     glintIntensity,
-    glintTint,
     grainCore,
     grainHalo,
     grainHaloAmp,
+    weaveAmount,
+    paletteZoneScale,
+    paletteA,
+    paletteB,
+    paletteC,
   }, setParticles] = useControls("Particles", () => ({
     particlesPerEdge: { value: 4_000, min: 500, max: 30_000, step: 500, label: "per edge" },
     // Streams = number of distinct smoke filaments per edge. Each stream's
@@ -128,7 +134,7 @@ export function ParticleField({
     streamsPerEdge: { value: 30, min: 1, max: 256, step: 1, label: "streams/edge" },
     samplesPerCurve: { value: 64, min: 16, max: 256, step: 16 },
     pointSize: {
-      value: 2, min: 0.5, max: 30, step: 0.1,
+      value: 4, min: 0.5, max: 30, step: 0.1,
       // Zoom-driven lerp: 2 at max zoom-in → 30.0 at max zoom-out. See
       // `intensity` for the transient/anchor pattern this mirrors.
       transient: false,
@@ -138,47 +144,52 @@ export function ParticleField({
         pointSizeAnchor.current = t < 0.99 ? (v - 30.0 * t) / (1 - t) : v;
       },
     },
-    tubeRadius: { value: 0.07, min: 0, max: 2.0, step: 0.01 },
+    tubeRadius: { value: 0, min: 0, max: 2.0, step: 0.01 },
     // Wisp: displacement from the curve spine is a dominant edge-local wind
     // (shared by all streams on the edge → adjacent threads curve together
     // into one wisp) plus a small per-stream perturbation (thread identity).
     // Gusts modulate the wind strength over time so the wisp pushes sideways
     // in bursts instead of swaying uniformly. Defaults captured from a tuned
     // max-zoom-out look.
-    wispAmp: { value: 0.19, min: 0, max: 3.0, step: 0.01, label: "wisp amp" },
-    wispStretch: { value: 1.1, min: 0.1, max: 20.0, step: 0.1, label: "wisp stretch" },
-    wispMorphSpeed: { value: 0.01, min: 0, max: 1.0, step: 0.005, label: "morph speed" },
-    edgeFlowSpread: { value: 0.29, min: 0, max: 5.0, step: 0.01, label: "edge spread" },
-    streamPerturb: { value: 0.75, min: 0, max: 1.0, step: 0.01, label: "thread detail" },
-    gustAmp: { value: 0.21, min: 0, max: 2.0, step: 0.01, label: "gust amp" },
-    gustSpeed: { value: 0.37, min: 0, max: 3.0, step: 0.01, label: "gust speed" },
-    wispOctave: { value: 1.14, min: 0, max: 1.5, step: 0.01, label: "fine octave" },
-    // Pin ends: collapse the wisp displacement at life=0 and life=1 so the
-    // start/end of each segment is anchored near the spine. Combined with
-    // `node volume` below, segments meeting at a node form a small 3D ball
-    // rather than a mathematical point.
-    pinEnds: { value: 0.18, min: 0, max: 0.5, step: 0.01, label: "pin ends" },
+    wispAmp: { value: 0.15, min: 0, max: 3.0, step: 0.01, label: "wisp amp" },
+    wispStretch: { value: 0.7, min: 0.1, max: 20.0, step: 0.1, label: "wisp stretch" },
+    wispMorphSpeed: { value: 0, min: 0, max: 1.0, step: 0.005, label: "morph speed" },
+    edgeFlowSpread: { value: 0, min: 0, max: 5.0, step: 0.01, label: "edge spread" },
+    streamPerturb: { value: 0.96, min: 0, max: 1.0, step: 0.01, label: "thread detail" },
+    gustAmp: { value: 0, min: 0, max: 2.0, step: 0.01, label: "gust amp" },
+    gustSpeed: { value: 0, min: 0, max: 3.0, step: 0.01, label: "gust speed" },
+    wispOctave: { value: 0.08, min: 0, max: 1.5, step: 0.01, label: "fine octave" },
+    // Pin ends: head and tail are independent so the tail can bloom outward
+    // (sand peeling off the brush tip) while the head stays tied to its
+    // source node. Combined with `node volume` below, segments meeting at a
+    // node form a small 3D ball rather than a mathematical point — keep the
+    // matching end's pin > 0 to preserve that.
+    pinHead: { value: 0, min: 0, max: 0.5, step: 0.01, label: "pin head" },
+    pinTail: { value: 0, min: 0, max: 0.5, step: 0.01, label: "pin tail" },
+    // Tail bloom: scales wisp drift up over the back half of life so the
+    // trailing end fans wider than the head. 0 = uniform amplitude.
+    tailBloom: { value: 0, min: 0, max: 4, step: 0.05, label: "tail bloom" },
     // Node volume: radius of the per-stream parking ball that takes over as
     // the pinch closes. 0 = collapse to spine point; higher = larger node
     // blob. Particles converging from any segment meeting at the same world
     // position fill the same ball, so nodes read as 3D volumes.
-    nodeVolume: { value: 0.315, min: 0, max: 0.5, step: 0.005, label: "node volume" },
+    nodeVolume: { value: 0.07, min: 0, max: 0.5, step: 0.005, label: "node volume" },
     // Bursty emission: gate alpha by a noise function indexed by
     // (streamId, life, time). Adjacent particles share the gate so bursts
     // read as coherent clumps moving through each stream, not per-particle
     // flicker. uBunchTime drifts the burst pattern over time.
     bunchFreq: { value: 0, min: 0, max: 40, step: 0.5, label: "bunch freq" },
-    bunchContrast: { value: 1, min: 0, max: 1, step: 0.01, label: "bunch contrast" },
+    bunchContrast: { value: 0, min: 0, max: 1, step: 0.01, label: "bunch contrast" },
     bunchTime: { value: 0, min: 0, max: 3, step: 0.01, label: "bunch drift" },
     // Burst gating: each stream emits rand(100..500) points continuously,
     // pauses for rand(200..700) points' worth of time, then repeats — both
     // re-rolled per cycle, per stream. Rate sets points/sec per stream.
-    burstEnable: { value: true, label: "burst on/off" },
+    burstEnable: { value: false, label: "burst on/off" },
     burstRate: { value: 60, min: 1, max: 500, step: 1, label: "burst rate (pts/s)" },
     // Motion-blur streak: enlarge each point sprite along the screen-space
     // curve tangent and elongate the visible region into an ellipse aligned
     // with motion. 0 = round grain (original look).
-    streakAmp: { value: 0, min: 0, max: 8, step: 0.05, label: "streak" },
+    streakAmp: { value: 0.6, min: 0, max: 8, step: 0.05, label: "streak" },
     // Sub-pixel shimmer guard. When the intended gl_PointSize would drop
     // below this value (in pixels), we clamp the size and dim the alpha by
     // the squared coverage ratio. Keeps very small particles stable instead
@@ -199,9 +210,9 @@ export function ParticleField({
         minPointSizeAnchor.current = tCurved < 0.99 ? (v - 1.5 * tCurved) / (1 - tCurved) : v;
       },
     },
-    speedScale: { value: 1.25, min: 0, max: 3, step: 0.01 },
+    speedScale: { value: 0.32, min: 0, max: 3, step: 0.01 },
     intensity: {
-      value: 4, min: 1.5, max: 6, step: 0.005,
+      value: 3.25, min: 1.5, max: 6, step: 0.005,
       // `transient: false` is critical here — without it leva drops the value
       // out of the returned object as soon as we attach an onChange, leaving
       // our useFrame reading `undefined`.
@@ -228,7 +239,7 @@ export function ParticleField({
       // zoom-out. The slider shows the currently effective value; dragging
       // it sets a new anchor via the inverse-lerp pattern.
       shimmerSpikeAmp: {
-        value: 5.0, min: 0, max: 10, step: 0.05, label: "spike amp",
+        value: 4.65, min: 0, max: 10, step: 0.05, label: "spike amp",
         transient: false,
         onChange: (v: number, _path: string, ctx: { fromPanel?: boolean }) => {
           if (!ctx.fromPanel) return;
@@ -242,16 +253,16 @@ export function ParticleField({
       shimmerDepth: { value: 1.0, min: 0, max: 1, step: 0.01, label: "depth" },
     }),
     "Node bulge": folder({
-      nodeRadius: { value: 0.06, min: 0.05, max: 3, step: 0.01, label: "radius" },
-      nodeEmphRadius: { value: 0.25, min: 0.05, max: 4, step: 0.01, label: "focus radius" },
+      nodeRadius: { value: 0.13, min: 0.05, max: 3, step: 0.01, label: "radius" },
+      nodeEmphRadius: { value: 0.14, min: 0.05, max: 4, step: 0.01, label: "focus radius" },
       nodeBulgeSize: { value: 0, min: 0, max: 15, step: 0.1, label: "size boost" },
       nodeColorMix: { value: 0, min: 0, max: 1, step: 0.01, label: "color mix" },
-      nodeBoost: { value: 1, min: 0, max: 10, step: 0.05, label: "brightness" },
+      nodeBoost: { value: 0, min: 0, max: 10, step: 0.05, label: "brightness" },
       nodeDriftBoost: { value: 0, min: 0, max: 20, step: 0.1, label: "drift boost" },
       nodeSwirlStrength: { value: 0, min: 0, max: 2, step: 0.01, label: "swirl amp" },
       nodeSwirlSpeed: { value: 0, min: 0, max: 10, step: 0.05, label: "swirl speed" },
-      nodeGravity: { value: -0.06, min: -1, max: 1, step: 0.01, label: "radial bias" },
-      nodeCenterGravity: { value: 0, min: -2, max: 2, step: 0.01, label: "center pull" },
+      nodeGravity: { value: 0, min: -1, max: 1, step: 0.01, label: "radial bias" },
+      nodeCenterGravity: { value: -0.22, min: -2, max: 2, step: 0.01, label: "center pull" },
       nodeCoreStrength: { value: 0, min: 0, max: 20, step: 0.1, label: "core spike" },
     }),
     Wind: folder({
@@ -261,16 +272,33 @@ export function ParticleField({
       windStrength: { value: 0.04, min: 0, max: 1, step: 0.005, label: "strength" },
       windSpeed: { value: 0.3, min: 0, max: 3, step: 0.05, label: "gust speed" },
     }),
+    // Glints are the bright per-particle pinpricks. They take the particle's
+    // own pigment (palette / stable / crisis / node tint) and the fragment
+    // shader pushes it to full saturation so the hue reads at glint scale —
+    // no shared tint here; the per-stream palette is what's seen.
     Glints: folder({
       glintRatio: { value: 0.03, min: 0, max: 1, step: 0.01, label: "ratio" },
       glintSizeMult: { value: 4, min: 1, max: 12, step: 0.1, label: "size mult" },
       glintIntensity: { value: 1, min: 1, max: 30, step: 0.1, label: "intensity" },
-      glintTint: { value: "#ffd9a0", label: "tint" },
     }),
     Grain: folder({
-      grainCore: { value: 40, min: 1, max: 80, step: 0.5, label: "core sharpness" },
-      grainHalo: { value: 1.3, min: 0.5, max: 10, step: 0.1, label: "halo sharpness" },
+      grainCore: { value: 80, min: 1, max: 80, step: 0.5, label: "core sharpness" },
+      grainHalo: { value: 8.7, min: 0.5, max: 10, step: 0.1, label: "halo sharpness" },
       grainHaloAmp: { value: 0, min: 0, max: 1, step: 0.01, label: "halo amp" },
+    }),
+    // Woven multi-pigment palette: each stream is assigned one of A/B/C
+    // (≈70/15/15 weighting in the vert shader) and the fragment shader
+    // mixes that pigment over the stable/crisis tint by weaveAmount.
+    // weaveAmount = 0 disables the effect entirely.
+    Weave: folder({
+      weaveAmount: { value: 1.0, min: 0, max: 1, step: 0.01, label: "weave amount" },
+      // Smaller = bigger color zones (a whole branch tends to be one
+      // pigment); larger = palette flips more often, approaching salt-and-
+      // pepper at ~1.0. Stream-id axis is the dominant feel knob.
+      paletteZoneScale: { value: 0.42, min: 0.02, max: 1.0, step: 0.01, label: "zone scale" },
+      paletteA: { value: "#c0202a", label: "A (dominant)" },
+      paletteB: { value: "#1a6db0", label: "B (accent)" },
+      paletteC: { value: "#e0a020", label: "C (accent)" },
     }),
   })) as any;
 
@@ -413,7 +441,9 @@ export function ParticleField({
       uGustAmp: { value: 0 },
       uGustSpeed: { value: 0 },
       uWispOctave: { value: 0 },
-      uPinEnds: { value: 0 },
+      uPinHead: { value: 0 },
+      uPinTail: { value: 0 },
+      uTailBloom: { value: 0 },
       uNodeVolume: { value: 0 },
       uBunchFreq: { value: 0 },
       uBunchContrast: { value: 0 },
@@ -459,10 +489,14 @@ export function ParticleField({
       uGlintRatio: { value: 0 },
       uGlintSizeMult: { value: 1 },
       uGlintIntensity: { value: 1 },
-      uGlintTint: { value: new THREE.Color(1, 0.85, 0.65) },
       uGrainCore: { value: 12 },
       uGrainHalo: { value: 3 },
       uGrainHaloAmp: { value: 0.1 },
+      uWeaveAmount: { value: 0 },
+      uPaletteZoneScale: { value: 0.1 },
+      uPaletteA: { value: new THREE.Color() },
+      uPaletteB: { value: new THREE.Color() },
+      uPaletteC: { value: new THREE.Color() },
     }),
     // The bulge arrays only change identity when Scene rebuilds them; otherwise
     // we just mutate in place. We don't list nodeBulge here because creating
@@ -509,7 +543,9 @@ export function ParticleField({
     uniforms.uGustAmp.value = gustAmp;
     uniforms.uGustSpeed.value = gustSpeed;
     uniforms.uWispOctave.value = wispOctave;
-    uniforms.uPinEnds.value = pinEnds;
+    uniforms.uPinHead.value = pinHead;
+    uniforms.uPinTail.value = pinTail;
+    uniforms.uTailBloom.value = tailBloom;
     uniforms.uNodeVolume.value = nodeVolume;
     uniforms.uBunchFreq.value = bunchFreq;
     uniforms.uBunchContrast.value = bunchContrast;
@@ -545,11 +581,15 @@ export function ParticleField({
     uniforms.uGlintRatio.value = glintRatio;
     uniforms.uGlintSizeMult.value = glintSizeMult;
     uniforms.uGlintIntensity.value = glintIntensity;
-    uniforms.uGlintTint.value.set(glintTint);
     uniforms.uGrainCore.value = grainCore;
     uniforms.uGrainHalo.value = grainHalo;
     uniforms.uGrainHaloAmp.value = grainHaloAmp;
-  }, [uniforms, pointSize, tubeRadius, wispAmp, wispStretch, wispMorphSpeed, edgeFlowSpread, streamPerturb, gustAmp, gustSpeed, wispOctave, pinEnds, nodeVolume, bunchFreq, bunchContrast, bunchTime, burstEnable, burstRate, streakAmp, minPointSize, speedScale, intensity, shimmerSpikeFreq, shimmerSpikeAmp, shimmerSharpness, shimmerSlowFreq, shimmerSlowAmp, shimmerDepth, stableColor, crisisColor, nodeRadius, nodeEmphRadius, nodeBulgeSize, nodeColorMix, nodeBoost, nodeDriftBoost, nodeSwirlStrength, nodeSwirlSpeed, nodeGravity, nodeCenterGravity, nodeCoreStrength, windX, windY, windZ, windStrength, windSpeed, glintRatio, glintSizeMult, glintIntensity, glintTint, grainCore, grainHalo, grainHaloAmp]);
+    uniforms.uWeaveAmount.value = weaveAmount;
+    uniforms.uPaletteZoneScale.value = paletteZoneScale;
+    uniforms.uPaletteA.value.set(paletteA);
+    uniforms.uPaletteB.value.set(paletteB);
+    uniforms.uPaletteC.value.set(paletteC);
+  }, [uniforms, pointSize, tubeRadius, wispAmp, wispStretch, wispMorphSpeed, edgeFlowSpread, streamPerturb, gustAmp, gustSpeed, wispOctave, pinHead, pinTail, tailBloom, nodeVolume, bunchFreq, bunchContrast, bunchTime, burstEnable, burstRate, streakAmp, minPointSize, speedScale, intensity, shimmerSpikeFreq, shimmerSpikeAmp, shimmerSharpness, shimmerSlowFreq, shimmerSlowAmp, shimmerDepth, stableColor, crisisColor, nodeRadius, nodeEmphRadius, nodeBulgeSize, nodeColorMix, nodeBoost, nodeDriftBoost, nodeSwirlStrength, nodeSwirlSpeed, nodeGravity, nodeCenterGravity, nodeCoreStrength, windX, windY, windZ, windStrength, windSpeed, glintRatio, glintSizeMult, glintIntensity, grainCore, grainHalo, grainHaloAmp, weaveAmount, paletteZoneScale, paletteA, paletteB, paletteC]);
 
   useEffect(() => {
     uniforms.uResolution.value.set(size.width, size.height);
