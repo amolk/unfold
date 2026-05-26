@@ -15,6 +15,9 @@ interface NodesProps {
   fadeAttribute: THREE.InstancedBufferAttribute;
   /** 0 = invisible (still raycastable for clicks), 1 = full sun-surface look. */
   sphereOpacity: number;
+  /** From the shared Theme panel — see theme.ts. */
+  stableColor: string;
+  crisisColor: string;
 }
 
 export function Nodes({
@@ -23,6 +26,8 @@ export function Nodes({
   onSelectNode,
   fadeAttribute,
   sphereOpacity,
+  stableColor,
+  crisisColor,
 }: NodesProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null!);
   const materialRef = useRef<THREE.ShaderMaterial>(null!);
@@ -30,13 +35,9 @@ export function Nodes({
   const {
     nodeRadius,
     rimStrength,
-    stableNodeColor,
-    crisisNodeColor,
   } = useControls("Nodes", {
     nodeRadius: { value: 0.2, min: 0.02, max: 1.5, step: 0.01 },
     rimStrength: { value: 3, min: 0, max: 3, step: 0.05, label: "rim" },
-    stableNodeColor: "#8CD0FF",
-    crisisNodeColor: "#FFB060",
   });
 
   // Static per-instance buffers (colors, kinds) rebuilt when the visible set
@@ -46,8 +47,8 @@ export function Nodes({
     const positions = new Float32Array(n * 3);
     const instColors = new Float32Array(n * 3);
     const instKinds = new Float32Array(n);
-    const stable = new THREE.Color(stableNodeColor);
-    const crisis = new THREE.Color(crisisNodeColor);
+    const stable = new THREE.Color(stableColor);
+    const crisis = new THREE.Color(crisisColor);
     timeline.nodes.forEach((node, i) => {
       positions[i * 3 + 0] = node.position.x;
       positions[i * 3 + 1] = node.position.y;
@@ -59,7 +60,7 @@ export function Nodes({
       instKinds[i] = node.kind === "crisis" ? 1 : 0;
     });
     return { positions, instColors, instKinds };
-  }, [timeline, stableNodeColor, crisisNodeColor]);
+  }, [timeline, stableColor, crisisColor]);
 
   // Apply instance matrices + (re)bind the static per-instance attributes.
   useEffect(() => {

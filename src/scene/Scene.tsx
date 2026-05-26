@@ -7,6 +7,7 @@ import { ParticleField } from "./ParticleField";
 import { Nodes } from "./Nodes";
 import { CameraFollow } from "./CameraFollow";
 import { SceneProjection } from "./scene-projection";
+import { useThemeColors } from "./theme";
 import {
   createExplorer,
   withFocus,
@@ -27,7 +28,7 @@ const EDGE_TEX_HEIGHT = 4096;
 
 export function Scene() {
   const [
-    { mode, seed, cameraEase, fadeSpeed, sphereOpacity, stableNodeColor, crisisNodeColor },
+    { mode: modeStr, seed, cameraEase, fadeSpeed, sphereOpacity },
     set,
   ] = useControls("Explorer", () => ({
       mode: {
@@ -66,9 +67,15 @@ export function Scene() {
         step: 0.01,
         label: "show spheres",
       },
-      stableNodeColor: { value: "#a8c8b3", label: "node stable" },
-      crisisNodeColor: { value: "#e0a050", label: "node crisis" },
-    })) as any;
+    }));
+  // leva's SelectInput inference widens the union to string at the
+  // destructure; narrow back at the boundary so downstream code can use
+  // the discriminated type directly.
+  const mode = modeStr as ExplorerMode;
+
+  // Single source of truth for stable/crisis colors across Nodes,
+  // ParticleField, and the bulge tint. See theme.ts.
+  const { stableColor, crisisColor } = useThemeColors();
 
   const [explorer, setExplorer] = useState<ExplorerState>(() => createExplorer({ seed, mode }));
   // CameraFollow fights OrbitControls panning by yanking the target back to
@@ -81,9 +88,9 @@ export function Scene() {
   const stableColor3 = useMemo(() => new THREE.Color(), []);
   const crisisColor3 = useMemo(() => new THREE.Color(), []);
   useEffect(() => {
-    stableColor3.set(stableNodeColor);
-    crisisColor3.set(crisisNodeColor);
-  }, [stableColor3, crisisColor3, stableNodeColor, crisisNodeColor]);
+    stableColor3.set(stableColor);
+    crisisColor3.set(crisisColor);
+  }, [stableColor3, crisisColor3, stableColor, crisisColor]);
 
   // Bumped when sync reports topology change, so the projection's `built`
   // bundle is rebuilt. NOT bumped on every fade-value tick — those are written
@@ -155,6 +162,8 @@ export function Scene() {
         timeline={built.timeline}
         edgeFadeTexture={projection.edgeFade.texture}
         nodeBulge={projection.nodeBulge}
+        stableColor={stableColor}
+        crisisColor={crisisColor}
       />
       <Nodes
         timeline={built.timeline}
@@ -162,6 +171,8 @@ export function Scene() {
         onSelectNode={handleSelectNode}
         fadeAttribute={projection.nodeFade.attribute}
         sphereOpacity={sphereOpacity}
+        stableColor={stableColor}
+        crisisColor={crisisColor}
       />
       {followArmed && focusNode && (
         <CameraFollow target={focusNode.position} lerp={cameraEase} />

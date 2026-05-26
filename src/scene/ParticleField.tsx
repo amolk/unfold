@@ -26,12 +26,17 @@ interface ParticleFieldProps {
   /** Per-node bulge data. Backing arrays are mutated by the owner each frame
    *  — we share the same references so the GPU sees the latest values. */
   nodeBulge: NodeBulgeData;
+  /** From the shared Theme panel — see theme.ts. */
+  stableColor: string;
+  crisisColor: string;
 }
 
 export function ParticleField({
   timeline,
   edgeFadeTexture,
   nodeBulge,
+  stableColor,
+  crisisColor,
 }: ParticleFieldProps) {
   const { size, camera, controls } = useThree();
   const materialRef = useRef<THREE.ShaderMaterial>(null!);
@@ -169,8 +174,9 @@ export function ParticleField({
   //   - zoom-driven (pointSize, intensity, minPointSize, shimmerSpikeAmp)
   //     for the per-frame diff push in useFrame
   //   - non-scalar conversions kept explicit in the mirror effect
-  //     (burstEnable bool→0/1, stableColor, crisisColor, wind triple → Vector3,
-  //     paletteA/B/C)
+  //     (burstEnable bool→0/1, wind triple → Vector3, paletteA/B/C).
+  //     stableColor/crisisColor are now sourced from theme.ts via props
+  //     and pushed through the same mirror effect.
   const [{
     particlesPerEdge,
     streamsPerEdge,
@@ -179,8 +185,6 @@ export function ParticleField({
     burstEnable,
     minPointSize,
     intensity,
-    stableColor,
-    crisisColor,
     shimmerSpikeAmp,
     windX,
     windY,
@@ -327,8 +331,6 @@ export function ParticleField({
       transient: false,
       onChange: intensityZoom.onChange,
     },
-    stableColor: "#8aa896",
-    crisisColor: "#d06030",
     Shimmer: folder({
       shimmerSpikeFreq: {
         value: 1.1, min: 0, max: 20, step: 0.1, label: "spike freq",
