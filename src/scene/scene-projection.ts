@@ -51,17 +51,15 @@ export interface NodeBulgeData {
 }
 
 /** The renderable bundle for a single active-set topology. Recreated when an
- *  entry is added or removed (or the focused id changes); stable across the
- *  per-frame fade ticks that mutate `nodeFadeAttribute` / `edgeFadeTexture`
- *  in place. */
+ *  entry is added or removed (or the focused id changes). Does NOT carry the
+ *  fade mirrors — those are one-shot on the projection and consumed directly
+ *  by the children via projection.nodeFade.attribute / projection.edgeFade.texture. */
 export interface SceneProjectionBuilt {
   timeline: Timeline;
   /** Maps the integer indices used in `timeline` back to the ExplorerNode ids
    *  the click handler dispatches against. */
   nodeIds: string[];
   focusIndex: number;
-  nodeFadeAttribute: THREE.InstancedBufferAttribute;
-  edgeFadeTexture: THREE.DataTexture;
 }
 
 /** Projects an ExplorerState's visible scene into the GPU-friendly Timeline
@@ -76,52 +74,45 @@ export interface SceneProjectionBuilt {
  *    4. Building the renderable bundle on topology / focus change.
  *
  *  React surface: construct once, then call reset / sync / build / tickFades
- *  / writeBulgeData / releasePreviousBuild / dispose from effects + useFrame.
- *  See Scene.tsx for the wiring. */
+ *  / writeBulgeData / dispose from effects + useFrame. See Scene.tsx for
+ *  the wiring.
+ *
+ *  All GPU mirrors are one-shot: allocated in the constructor at fixed
+ *  capacity (nodeTexHeight / edgeTexHeight) and reused across every build().
+ *  Active entries occupy the first N rows; the shader reads only that range.
+ *  This trades a bounded steady-state allocation for never having to dispose
+ *  a still-bound texture during render. */
 export class SceneProjection {
   private nodes = new Map<string, NodeEntry>();
   private edges = new Map<string, EdgeEntry>();
 
-  // Current = mirrors bound to the shader right now (written through by
-  // tickFades). Previous = the build before that, kept alive until the
-  // children have re-bound to the new mirrors; releasePreviousBuild() (called
-  // from a Scene useEffect AFTER children rebind) frees their GPU buffers.
-  // We must NOT dispose during build() — build runs inside React's render
-  // phase, but child rebind effects run post-commit, so disposing in-line
-  // would free a texture still bound to the live material for one frame.
-  private currentBuiltNodeFade: MirroredAttribute | null = null;
-  private currentBuiltEdgeFade: MirroredTexture | null = null;
-  private previousBuiltNodeFade: MirroredAttribute | null = null;
-  private previousBuiltEdgeFade: MirroredTexture | null = null;
-
   readonly nodeBulge: NodeBulgeData;
+  /** Per-node fade attribute, fixed capacity. Active entries occupy slots
+   *  0..nodes.size-1; tickFades / build write the same buffer. Exposed as
+   *  the bound attribute on Nodes' InstancedMesh. */
+  readonly nodeFade: MirroredAttribute;
+  /** Per-edge fade texture, fixed capacity. Same layout convention as
+   *  nodeFade. RGBA = (fade, stub-entry-ramp flag, _, 1.0). */
+  readonly edgeFade: MirroredTexture;
+  readonly edgeTexHeight: number;
 
-  constructor(nodeTexHeight: number) {
+  constructor(nodeTexHeight: number, edgeTexHeight: number) {
     this.nodeBulge = {
       posFade: createMirroredTexture(nodeTexHeight),
       colorEmph: createMirroredTexture(nodeTexHeight),
       count: { value: 0 },
       texHeight: nodeTexHeight,
     };
+    this.nodeFade = createMirroredAttribute(nodeTexHeight, 1);
+    this.edgeFade = createMirroredTexture(edgeTexHeight);
+    this.edgeTexHeight = edgeTexHeight;
   }
 
-  /** Drop all entries. Used on seed/mode change in Scene. The bulge mirrors
-   *  stay (one-shot allocation; reused across rebuilds). Per-build mirrors
-   *  are scheduled for release via releasePreviousBuild() so callers don't
-   *  free GL buffers that are still bound to the live material. */
+  /** Drop all entries. Used on seed/mode change in Scene. GPU mirrors are
+   *  one-shot and stay allocated; they get repopulated on the next build(). */
   reset() {
     this.nodes.clear();
     this.edges.clear();
-    // Demote the current build to "previous"; Scene's release effect will
-    // dispose it after the next render cycle (or this very next build()).
-    if (this.currentBuiltNodeFade || this.currentBuiltEdgeFade) {
-      this.previousBuiltNodeFade?.dispose();
-      this.previousBuiltEdgeFade?.dispose();
-      this.previousBuiltNodeFade = this.currentBuiltNodeFade;
-      this.previousBuiltEdgeFade = this.currentBuiltEdgeFade;
-      this.currentBuiltNodeFade = null;
-      this.currentBuiltEdgeFade = null;
-    }
   }
 
   /** Sync the active set to match `visible`. Returns true iff the set of
@@ -194,10 +185,10 @@ export class SceneProjection {
     return topologyChanged;
   }
 
-  /** Build the renderable bundle from the current active entries. Pure
-   *  except for assigning `.index` back onto entries so tickFades knows where
-   *  to write each fade value, and demoting the previous build's mirrors to
-   *  `previousBuilt*` for later disposal (safe — see field comment). */
+  /** Build the renderable bundle from the current active entries. Writes
+   *  fade + per-edge G-channel flag into the one-shot mirrors (first N
+   *  slots); the children's bindings to `nodeFade`/`edgeFade` are stable
+   *  across builds, so there's no GPU resource to dispose. */
   build(focusId: string): SceneProjectionBuilt {
     const nodeEntries = Array.from(this.nodes.values());
     const edgeEntries = Array.from(this.edges.values());
@@ -229,82 +220,56 @@ export class SceneProjection {
       };
     });
 
-    const nodeMirror = createMirroredAttribute(nodeEntries.length, 1);
+    // Seed the one-shot fade buffers for the new entry layout. Slots beyond
+    // nodeEntries.length / edgeEntries.length keep their stale values, but
+    // the shader never samples them (it reads only the first N rows).
     nodeEntries.forEach((e, i) => {
-      nodeMirror.data[i] = e.fade;
+      this.nodeFade.data[i] = e.fade;
     });
-    nodeMirror.markDirty();
+    this.nodeFade.markDirty();
 
-    // Edge fade texture: 1×N RGBA float.
-    //   R = current per-edge fade (mutated each frame).
+    // Edge fade texture: 1×N RGBA float, first N rows in use.
+    //   R = current per-edge fade (mutated each frame by tickFades).
     //   G = entry-ramp flag (1 = particle alpha ramps in along the curve from
     //       life=0 → life≈0.6, used by the root's incoming stub so its
     //       upstream end dissolves into the background).
-    const edgeMirror = createMirroredTexture(edgeEntries.length);
     edgeEntries.forEach((e, i) => {
-      edgeMirror.data[i * 4] = e.fade;
-      edgeMirror.data[i * 4 + 1] = e.edge.fromId === STUB_FROM_ID ? 1 : 0;
-      edgeMirror.data[i * 4 + 3] = 1;
+      const p4 = i * 4;
+      this.edgeFade.data[p4 + 0] = e.fade;
+      this.edgeFade.data[p4 + 1] = e.edge.fromId === STUB_FROM_ID ? 1 : 0;
+      this.edgeFade.data[p4 + 3] = 1;
     });
-    edgeMirror.markDirty();
+    this.edgeFade.markDirty();
 
     const nodeIds = nodeEntries.map((e) => e.node.id);
     const focusIndex = nodeIndex.get(focusId) ?? 0;
 
-    const built: SceneProjectionBuilt = {
+    return {
       timeline: { nodes: tlNodes, edges: tlEdges },
       nodeIds,
       focusIndex,
-      nodeFadeAttribute: nodeMirror.attribute,
-      edgeFadeTexture: edgeMirror.texture,
     };
-    // Demote current → previous. Defer disposal of `previous` to a Scene
-    // useEffect that fires after the children's rebind effects (parent
-    // effects run after child effects on a single commit). If a third
-    // build() arrives before that effect runs, we drop the oldest now —
-    // that one's safe because the children never bound to it.
-    this.previousBuiltNodeFade?.dispose();
-    this.previousBuiltEdgeFade?.dispose();
-    this.previousBuiltNodeFade = this.currentBuiltNodeFade;
-    this.previousBuiltEdgeFade = this.currentBuiltEdgeFade;
-    this.currentBuiltNodeFade = nodeMirror;
-    this.currentBuiltEdgeFade = edgeMirror;
-    return built;
-  }
-
-  /** Free the previous build's GPU buffers, called from a Scene useEffect
-   *  keyed on `built` so it runs AFTER ParticleField/Nodes have rebound
-   *  their uniforms/attributes to the new mirrors. Doing this safely is the
-   *  whole reason build() doesn't dispose in-line. */
-  releasePreviousBuild() {
-    this.previousBuiltNodeFade?.dispose();
-    this.previousBuiltEdgeFade?.dispose();
-    this.previousBuiltNodeFade = null;
-    this.previousBuiltEdgeFade = null;
   }
 
   /** Advance fade toward each entry's target, writing the new value through
-   *  to the GPU mirrors built in the last `build()` call. `k` is the per-tick
-   *  lerp factor (`1 - exp(-dt * fadeSpeed)`). */
+   *  to the GPU mirrors in the slot assigned by the last build(). `k` is the
+   *  per-tick lerp factor (`1 - exp(-dt * fadeSpeed)`). */
   tickFades(k: number) {
-    const nodeMirror = this.currentBuiltNodeFade;
-    const edgeMirror = this.currentBuiltEdgeFade;
-
     this.nodes.forEach((entry) => {
       entry.fade += (entry.target - entry.fade) * k;
-      if (nodeMirror && entry.index >= 0 && entry.index < nodeMirror.data.length) {
-        nodeMirror.data[entry.index] = entry.fade;
+      if (entry.index >= 0 && entry.index < this.nodeFade.data.length) {
+        this.nodeFade.data[entry.index] = entry.fade;
       }
     });
-    nodeMirror?.markDirty();
+    this.nodeFade.markDirty();
 
     this.edges.forEach((entry) => {
       entry.fade += (entry.target - entry.fade) * k;
-      if (edgeMirror && entry.index >= 0 && entry.index * 4 < edgeMirror.data.length) {
-        edgeMirror.data[entry.index * 4] = entry.fade;
+      if (entry.index >= 0 && entry.index * 4 < this.edgeFade.data.length) {
+        this.edgeFade.data[entry.index * 4] = entry.fade;
       }
     });
-    edgeMirror?.markDirty();
+    this.edgeFade.markDirty();
   }
 
   /** Repopulate the node-bulge mirrored textures for the shader. Skips
@@ -333,19 +298,12 @@ export class SceneProjection {
     colorEmph.markDirty();
   }
 
-  /** Release every GPU resource owned by the projection — nodeBulge mirrors
-   *  + the current and previous build's mirrors. Called from Scene's
-   *  unmount-cleanup effect. */
+  /** Release every GPU resource owned by the projection. Called from
+   *  Scene's unmount-cleanup effect. */
   dispose() {
     this.nodeBulge.posFade.dispose();
     this.nodeBulge.colorEmph.dispose();
-    this.currentBuiltNodeFade?.dispose();
-    this.currentBuiltEdgeFade?.dispose();
-    this.previousBuiltNodeFade?.dispose();
-    this.previousBuiltEdgeFade?.dispose();
-    this.currentBuiltNodeFade = null;
-    this.currentBuiltEdgeFade = null;
-    this.previousBuiltNodeFade = null;
-    this.previousBuiltEdgeFade = null;
+    this.nodeFade.dispose();
+    this.edgeFade.dispose();
   }
 }

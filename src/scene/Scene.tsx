@@ -17,10 +17,13 @@ import {
 } from "../explorer/state";
 
 // Hard cap for the shader's bulge loop and the height of the node-data
-// textures. The shader still early-exits at uNodeCount, so cost scales with
-// the actual active node count, not this number. Picked large enough that any
-// realistic tree fits without re-allocating.
+// textures (and per-node fade attribute, and per-edge fade texture). The
+// shader / draw count clips to the live entry count, so GPU work scales
+// with active entries — these caps just bound the steady-state allocation.
+// 4096 fits any realistic tree without re-allocating; chosen to match
+// MAX_VERTEX_TEXTURE_IMAGE_UNITS headroom across desktop GPUs.
 const NODE_TEX_HEIGHT = 4096;
+const EDGE_TEX_HEIGHT = 4096;
 
 export function Scene() {
   const [
@@ -73,7 +76,7 @@ export function Scene() {
   // camera entirely to them — first click arms the follower.
   const [followArmed, setFollowArmed] = useState(false);
 
-  const projection = useMemo(() => new SceneProjection(NODE_TEX_HEIGHT), []);
+  const projection = useMemo(() => new SceneProjection(NODE_TEX_HEIGHT, EDGE_TEX_HEIGHT), []);
 
   const stableColor3 = useMemo(() => new THREE.Color(), []);
   const crisisColor3 = useMemo(() => new THREE.Color(), []);
@@ -110,17 +113,12 @@ export function Scene() {
     [projection, activeKey, explorer.focusId],
   );
 
-  // Release the previous build's GPU buffers AFTER children (ParticleField /
-  // Nodes) have re-bound to the new mirrors. React runs child effects before
-  // parent effects on a single commit, so by the time this fires the live
-  // material no longer references the texture we're about to dispose. Doing
-  // the dispose inside projection.build() (which runs during render) would
-  // free a still-bound texture for one frame.
-  useEffect(() => {
-    projection.releasePreviousBuild();
-  }, [projection, built]);
-
-  // Free every GPU resource the projection owns when Scene unmounts.
+  // Free every GPU resource the projection owns when Scene unmounts. The
+  // per-build mirrors used to live on the Built bundle and required a
+  // deferred-disposal dance to avoid freeing a still-bound texture during
+  // render; they're now fixed-capacity one-shots on the projection itself,
+  // so there's no per-build lifecycle to manage and unmount is the only
+  // cleanup point.
   useEffect(() => () => projection.dispose(), [projection]);
 
   useFrame((_, dt) => {
@@ -155,14 +153,14 @@ export function Scene() {
     <>
       <ParticleField
         timeline={built.timeline}
-        edgeFadeTexture={built.edgeFadeTexture}
+        edgeFadeTexture={projection.edgeFade.texture}
         nodeBulge={projection.nodeBulge}
       />
       <Nodes
         timeline={built.timeline}
         focusedIndex={built.focusIndex}
         onSelectNode={handleSelectNode}
-        fadeAttribute={built.nodeFadeAttribute}
+        fadeAttribute={projection.nodeFade.attribute}
         sphereOpacity={sphereOpacity}
       />
       {followArmed && focusNode && (
