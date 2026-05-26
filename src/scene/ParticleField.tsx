@@ -5,26 +5,12 @@ import * as THREE from "three";
 import { Timeline, sampleBezier } from "../timeline/generate";
 import { particlesVert } from "./particles.vert.glsl";
 import { particlesFrag } from "./particles.frag.glsl";
+import type { NodeBulgeData } from "./scene-projection";
+
+export type { NodeBulgeData };
 
 // No-op raycast so the particle field never participates in click intersection.
 const noopRaycast = () => {};
-
-export interface NodeBulgeData {
-  /** xyz = world position, w = per-node fade. Length = texHeight * 4. */
-  posFade: Float32Array;
-  /** rgb = color, w = focus emphasis (0 or 1). Length = texHeight * 4. */
-  colorEmph: Float32Array;
-  /** 1×texHeight RGBA float; the shader samples this instead of reading a
-   *  uniform array (which is bounded by MAX_VERTEX_UNIFORM_VECTORS). The
-   *  owner is responsible for setting needsUpdate after writing to posFade. */
-  posFadeTex: THREE.DataTexture;
-  /** As posFadeTex, but for colorEmph. */
-  colorEmphTex: THREE.DataTexture;
-  /** Number of valid entries (capped at texHeight). */
-  count: { value: number };
-  /** Height of the data textures — used by the shader to convert i → uv.y. */
-  texHeight: number;
-}
 
 interface ParticleFieldProps {
   timeline: Timeline;
@@ -469,8 +455,8 @@ export function ParticleField({
       // uniform arrays) avoids MAX_VERTEX_UNIFORM_VECTORS limits on the GPU,
       // so we can scale to thousands of nodes.
       uNodeCount: { value: 0 },
-      uNodePosFadeTex: { value: nodeBulge.posFadeTex },
-      uNodeColorEmphTex: { value: nodeBulge.colorEmphTex },
+      uNodePosFadeTex: { value: nodeBulge.posFade.texture },
+      uNodeColorEmphTex: { value: nodeBulge.colorEmph.texture },
       uNodeTexHeight: { value: nodeBulge.texHeight },
       uNodeRadius: { value: 0.45 },
       uNodeEmphRadius: { value: 0.8 },
@@ -508,8 +494,8 @@ export function ParticleField({
   // Repoint the bulge texture uniforms whenever the textures themselves are
   // recreated (rare — only on hot-reload or component remount).
   useEffect(() => {
-    uniforms.uNodePosFadeTex.value = nodeBulge.posFadeTex;
-    uniforms.uNodeColorEmphTex.value = nodeBulge.colorEmphTex;
+    uniforms.uNodePosFadeTex.value = nodeBulge.posFade.texture;
+    uniforms.uNodeColorEmphTex.value = nodeBulge.colorEmph.texture;
     uniforms.uNodeTexHeight.value = nodeBulge.texHeight;
   }, [uniforms, nodeBulge]);
 
