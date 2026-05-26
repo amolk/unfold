@@ -37,6 +37,16 @@ interface ParticleFieldProps {
   streamsPerEdge?: number;
   /** Bezier samples baked into the curve texture. Formerly "samplesPerCurve". */
   samplesPerCurve?: number;
+  // --- style.edge.* tunables (Phase 3). Each maps to a single uniform; the
+  // effect below pushes them live. Defaults match the baked uniform values. ---
+  wispAmplitude?: number;
+  wispStretch?: number;
+  threadDetail?: number;
+  streakLength?: number;
+  speed?: number;
+  shimmer?: number;
+  glintRatio?: number;
+  glintIntensity?: number;
 }
 
 export function ParticleField({
@@ -48,6 +58,14 @@ export function ParticleField({
   particlesPerEdge = DEFAULT_PARTICLES_PER_EDGE,
   streamsPerEdge = DEFAULT_STREAMS_PER_EDGE,
   samplesPerCurve = DEFAULT_SAMPLES_PER_CURVE,
+  wispAmplitude = 0.15,
+  wispStretch = 0.7,
+  threadDetail = 0.96,
+  streakLength = 0.6,
+  speed = 0.32,
+  shimmer = 0.1,
+  glintRatio = 0.03,
+  glintIntensity = 1,
 }: ParticleFieldProps) {
   const { size, camera } = useThree();
   const controls = useOrbitControls();
@@ -317,14 +335,36 @@ export function ParticleField({
     uniforms.uEdgeFadeTexHeight.value = edgeFadeTexture.image.height;
   }, [uniforms, edgeFadeTexture]);
 
-  // Theme colors are the only formerly-Leva uniforms still driven from React;
-  // they arrive as props now. Everything else (wind, palette, burst, and the
-  // ~40 transient-onChange tunables) is baked into the uniforms object's
-  // defaults above and will be re-exposed as `style` props in Phase 3.
+  // Theme colors arrive as props (the internal kind-based model until Phase 5).
   useEffect(() => {
     uniforms.uStableColor.value.set(stableColor);
     uniforms.uCrisisColor.value.set(crisisColor);
   }, [uniforms, stableColor, crisisColor]);
+
+  // style.edge.* tunables → uniforms. The long tail of fine-tuning uniforms
+  // (wind, palette weave, node-bulge, burst, grain, and the zoom-driven
+  // point-size/intensity anchors) stays baked at the uniforms-object defaults;
+  // see the `style.edge` JSDoc in types.ts for why they aren't exposed.
+  useEffect(() => {
+    uniforms.uWispAmp.value = wispAmplitude;
+    uniforms.uWispStretch.value = wispStretch;
+    uniforms.uStreamPerturb.value = threadDetail;
+    uniforms.uStreakAmp.value = streakLength;
+    uniforms.uSpeedScale.value = speed;
+    uniforms.uShimmerSlowAmp.value = shimmer;
+    uniforms.uGlintRatio.value = glintRatio;
+    uniforms.uGlintIntensity.value = glintIntensity;
+  }, [
+    uniforms,
+    wispAmplitude,
+    wispStretch,
+    threadDetail,
+    streakLength,
+    speed,
+    shimmer,
+    glintRatio,
+    glintIntensity,
+  ]);
 
   useEffect(() => {
     uniforms.uResolution.value.set(size.width, size.height);

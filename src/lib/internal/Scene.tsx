@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { ParticleField } from "./ParticleField";
 import { Nodes } from "./Nodes";
 import { SceneProjection, normalizeData } from "./scene-projection";
-import { DEFAULT_SCENE, DEFAULT_THEME } from "./defaults";
+import type { ResolvedStyle, ResolvedTheme } from "./defaults";
 import type { UnfoldData } from "../types";
 
 // Hard cap for the shader's bulge loop and the height of the node-data
@@ -21,26 +21,16 @@ interface SceneProps {
   /** The graph to render. Phase 2: positions/controls supplied by the caller;
    *  auto-layout for missing positions lands in Phase 4. */
   data: UnfoldData;
-  stableColor?: string;
-  crisisColor?: string;
-  /** 0 = spheres invisible (still raycastable), 1 = full sun-surface look. */
-  sphereOpacity?: number;
-  cameraEase?: number;
-  /** Per-second fade rate for node/edge enter/exit. */
-  fadeSpeed?: number;
-  nodeRadius?: number;
-  rimStrength?: number;
+  /** Fully-resolved theme/style (see defaults.ts). Unfold merges the public
+   *  props over the defaults before handing them down. */
+  theme: ResolvedTheme;
+  style: ResolvedStyle;
 }
 
-export function Scene({
-  data,
-  stableColor = DEFAULT_THEME.stableColor,
-  crisisColor = DEFAULT_THEME.crisisColor,
-  sphereOpacity = DEFAULT_SCENE.sphereOpacity,
-  fadeSpeed = DEFAULT_SCENE.fadeSpeed,
-  nodeRadius = DEFAULT_SCENE.nodeRadius,
-  rimStrength = DEFAULT_SCENE.rimStrength,
-}: SceneProps) {
+export function Scene({ data, theme, style }: SceneProps) {
+  const stableColor = theme.stableColor;
+  const crisisColor = theme.crisisColor;
+  const fadeSpeed = style.fade.speed;
   // Normalize the public data into the projection's internal shape once per
   // data identity. Static for the tracer bullet; diffed in later phases.
   const normalized = useMemo(() => normalizeData(data), [data]);
@@ -100,16 +90,26 @@ export function Scene({
         nodeBulge={projection.nodeBulge}
         stableColor={stableColor}
         crisisColor={crisisColor}
+        particlesPerEdge={style.edge.density}
+        streamsPerEdge={style.edge.streams}
+        wispAmplitude={style.edge.wispAmplitude}
+        wispStretch={style.edge.wispStretch}
+        threadDetail={style.edge.threadDetail}
+        streakLength={style.edge.streakLength}
+        speed={style.edge.speed}
+        shimmer={style.edge.shimmer}
+        glintRatio={style.edge.glintRatio}
+        glintIntensity={style.edge.glintIntensity}
       />
       <Nodes
         timeline={built.timeline}
         focusedIndex={built.focusIndex}
         fadeAttribute={projection.nodeFade.attribute}
-        sphereOpacity={sphereOpacity}
+        sphereOpacity={style.node.opacity}
         stableColor={stableColor}
         crisisColor={crisisColor}
-        nodeRadius={nodeRadius}
-        rimStrength={rimStrength}
+        nodeRadius={style.node.baseRadius}
+        rimStrength={style.node.rimStrength}
       />
       <OrbitControls
         enablePan

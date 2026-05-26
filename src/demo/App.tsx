@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import { Unfold } from "../lib";
 import { buildDemoData } from "./demo-data";
+import { useUnfoldStyleControls, useUnfoldThemeControls } from "./leva-panels";
 
 /** Catches render errors from the R3F tree and shows the stack inline, instead
  *  of a blank canvas. Lives in the demo, not the library — consumers bring
@@ -43,9 +44,11 @@ class Boundary extends React.Component<
 
 export function App() {
   const data = useMemo(() => buildDemoData(), []);
+  const theme = useUnfoldThemeControls();
+  const style = useUnfoldStyleControls();
   return (
     <Boundary>
-      <Unfold data={data} />
+      <Unfold data={data} theme={theme} style={style} />
     </Boundary>
   );
 }

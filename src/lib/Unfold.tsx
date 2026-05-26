@@ -1,9 +1,9 @@
-import { forwardRef } from "react";
+import { forwardRef, useMemo } from "react";
 import { Canvas } from "@react-three/fiber";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import { KernelSize } from "postprocessing";
 import { Scene } from "./internal/Scene";
-import { DEFAULT_BLOOM, DEFAULT_BACKGROUND } from "./internal/defaults";
+import { DEFAULT_BLOOM, resolveStyle, resolveTheme } from "./internal/defaults";
 import type { UnfoldHandle, UnfoldProps } from "./types";
 
 function BloomFx() {
@@ -22,10 +22,9 @@ function BloomFx() {
 
 /** Renders a graph through the extracted R3F scene.
  *
- *  v0.1 (Phase 2 tracer bullet): only `data` is wired. Every other prop on
- *  `UnfoldProps` is accepted for forward-compatible type-checking but is a
- *  no-op until the phase that lands its behavior:
- *    - `theme`, `style`           → Phase 3
+ *  Wired so far: `data` (Phase 2), `theme` + `style` (Phase 3). Every other
+ *  prop on `UnfoldProps` is accepted for forward-compatible type-checking but
+ *  is a no-op until the phase that lands its behavior:
  *    - `layout`                   → Phase 4
  *    - `onNode*` / `onEdge*` /
  *      `onBackgroundClick`        → Phase 6
@@ -36,23 +35,27 @@ function BloomFx() {
  *      animated data diff)        → Phase 8
  *    - `cameraMode`, `initialCamera` → Phase 9
  *    - `ref` (UnfoldHandle)       → Phase 10
- *  Setting any of these today is silently ignored. */
+ *  Setting any of those today is silently ignored. */
 export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
-  { data },
+  { data, theme, style },
   _ref,
 ) {
+  const resolvedTheme = useMemo(() => resolveTheme(theme), [theme]);
+  const resolvedStyle = useMemo(() => resolveStyle(style), [style]);
+  const bg = resolvedTheme.background;
+
   return (
     <Canvas
       gl={{ antialias: false, alpha: false, powerPreference: "high-performance" }}
       camera={{ position: [9, 1.2, 0], fov: 38, near: 0.1, far: 200 }}
       dpr={[1, 1.5]}
       onCreated={({ gl }) => {
-        gl.setClearColor(DEFAULT_BACKGROUND, 1);
+        gl.setClearColor(bg, 1);
       }}
     >
-      <color attach="background" args={[DEFAULT_BACKGROUND]} />
-      <fog attach="fog" args={[DEFAULT_BACKGROUND, 10, 40]} />
-      <Scene data={data} />
+      <color attach="background" args={[bg]} />
+      <fog attach="fog" args={[bg, 10, 40]} />
+      <Scene data={data} theme={resolvedTheme} style={resolvedStyle} />
       <BloomFx />
     </Canvas>
   );

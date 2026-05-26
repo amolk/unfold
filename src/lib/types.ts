@@ -72,23 +72,48 @@ export interface UnfoldTheme {
 
 export interface UnfoldStyle {
   node?: {
+    /** Sphere radius in world units. Default 0.2. */
     baseRadius?: number;
+    /** Rim-light strength on the node spheres. Default 3. */
     rimStrength?: number;
+    /** Sphere body opacity; 0 = invisible spheres (still pickable). Default 0.07. */
+    opacity?: number;
   };
   edge?: {
-    particleSize?: number;
+    /** Particles emitted per visible edge — overall stream density. Default 4000. */
+    density?: number;
+    /** Distinct smoke filaments per edge. Fewer = fatter wisps. Default 30. */
+    streams?: number;
+    /** Sideways wisp displacement amplitude. Default 0.15. */
     wispAmplitude?: number;
-    shimmer?: number;
+    /** Wisp stretch along the curve tangent. Default 0.7. */
+    wispStretch?: number;
+    /** Per-thread noise detail in [0,1]. Default 0.96. */
+    threadDetail?: number;
+    /** Motion-blur streak length. 0 = round grains. Default 0.6. */
     streakLength?: number;
-    // The remaining ParticleField tunables are surfaced here in Phase 3; all
-    // fields are optional and fall back to the library defaults.
+    /** Particle travel-speed multiplier. Default 0.32. */
+    speed?: number;
+    /** Slow shimmer amplitude in [0,1]. Default 0.1. */
+    shimmer?: number;
+    /** Fraction of particles rendered as bright glints in [0,1]. Default 0.03. */
+    glintRatio?: number;
+    /** Glint brightness multiplier. Default 1. */
+    glintIntensity?: number;
+    // The long tail of fine-tuning ParticleField uniforms (wind, palette weave,
+    // node-bulge, burst gating, grain, the zoom-driven point-size/intensity
+    // anchors, ~40 in total) is intentionally NOT exposed here: those were
+    // authoring-time knobs used to dial in the look, which is now baked as the
+    // default. They stay at their tuned values in ParticleField's uniforms
+    // object. Promote one to a field here if a real consumer need appears.
   };
   camera?: {
-    easeMs?: number;
+    /** Focus-follow lerp factor applied per frame, in [0,1]. Default 0.005. */
+    ease?: number;
   };
   fade?: {
-    enterMs?: number;
-    exitMs?: number;
+    /** Per-second rate at which nodes/edges fade in and out. Default 2.0. */
+    speed?: number;
   };
 }
 
