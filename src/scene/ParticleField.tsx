@@ -7,6 +7,7 @@ import { particlesVert } from "./particles.vert.glsl";
 import { particlesFrag } from "./particles.frag.glsl";
 import type { NodeBulgeData } from "./scene-projection";
 import { useZoomDrivenControl } from "./useZoomDrivenControl";
+import { useOrbitControls } from "./useOrbitControls";
 
 export type { NodeBulgeData };
 
@@ -38,7 +39,8 @@ export function ParticleField({
   stableColor,
   crisisColor,
 }: ParticleFieldProps) {
-  const { size, camera, controls } = useThree();
+  const { size, camera } = useThree();
+  const controls = useOrbitControls();
   const materialRef = useRef<THREE.ShaderMaterial>(null!);
   // Reused each frame to avoid allocating in useFrame.
   const fallbackTarget = useMemo(() => new THREE.Vector3(), []);
@@ -648,7 +650,7 @@ export function ParticleField({
     // panel shows the currently effective value. The hook owns the per-
     // control easing curve. Distance range matches OrbitControls min/max
     // in Scene.tsx.
-    const target = (controls as { target?: THREE.Vector3 } | null)?.target ?? fallbackTarget;
+    const target = controls?.target ?? fallbackTarget;
     const dist = camera.position.distanceTo(target);
     zoomT.current = THREE.MathUtils.clamp((dist - 2) / (60 - 2), 0, 1);
 

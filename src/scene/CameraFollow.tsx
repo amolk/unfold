@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
-import { useFrame, useThree } from "@react-three/fiber";
+import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
+import { useOrbitControls } from "./useOrbitControls";
 
 interface CameraFollowProps {
   target: THREE.Vector3;
@@ -19,14 +20,7 @@ interface CameraFollowProps {
  *       should leave the cursor where it is, not snap back to focus).
  *  The latch is cleared each time `target` changes — a new focus re-arms. */
 export function CameraFollow({ target, lerp = 0.08 }: CameraFollowProps) {
-  const controls = useThree((s) => s.controls) as
-    | (THREE.EventDispatcher & {
-        target: THREE.Vector3;
-        update: () => void;
-        addEventListener: (type: string, listener: () => void) => void;
-        removeEventListener: (type: string, listener: () => void) => void;
-      })
-    | null;
+  const controls = useOrbitControls();
   const desired = useRef(target.clone());
   const latched = useRef(false);
 
