@@ -6,8 +6,14 @@ import { Timeline, sampleBezier } from "../timeline/generate";
 import { particlesVert } from "./particles.vert.glsl";
 import { particlesFrag } from "./particles.frag.glsl";
 import type { NodeBulgeData } from "./scene-projection";
+import { useZoomDrivenControl } from "./useZoomDrivenControl";
 
 export type { NodeBulgeData };
+
+// Per-frame "did this zoom-driven control move enough to push back to leva?"
+// epsilon. Below every slider's step for the affected controls; chosen once
+// here so the per-control diff checks don't drift apart.
+const ZOOM_PANEL_PUSH_EPSILON = 1e-4;
 
 // No-op raycast so the particle field never participates in click intersection.
 const noopRaycast = () => {};
@@ -32,23 +38,28 @@ export function ParticleField({
   // Reused each frame to avoid allocating in useFrame.
   const fallbackTarget = useMemo(() => new THREE.Vector3(), []);
 
-  // Anchors for the zoom-driven crossfade. The sliders below display the
-  // currently *effective* (lerped) value; the anchor is the "fully zoomed in"
-  // baseline that the lerp pivots around. When the user drags the slider
-  // (fromPanel=true), we treat that as a new anchor. We also stash the most
-  // recent zoom t so onChange can be evaluated in the correct context.
-  const intensityAnchor = useRef(3.25);
-  const pointSizeAnchor = useRef(4);
-  // minPointSize anchor (zoomed-in baseline). The shimmer-guard floor lerps
-  // from this value down to 1.5 at zoom-out, with a cubic ease-out — so the
-  // floor drops off quickly from zoom-in and then hovers near 1.5 through
-  // the middle and late zoom range.
-  const minPointSizeAnchor = useRef(5);
-  // Shimmer spike amplitude is zoom-driven, anchor at zoom-in → 0 at
-  // zoom-out (linear). Glints are noticeable up close and fade out as the
-  // camera pulls back to a wide shot.
-  const shimmerSpikeAmpAnchor = useRef(4.65);
+  // Zoom-driven controls. The slider value shown to the user is the
+  // currently *effective* (lerped) value; the hook owns the "fully zoomed
+  // in" anchor and inverse-lerps it back from any panel drag so changes
+  // stick at the current camera distance instead of jumping the next frame.
+  // All four controls share `zoomT`, which is written once per frame in
+  // useFrame from the camera-distance parameter.
   const zoomT = useRef(0);
+  const pointSizeZoom = useZoomDrivenControl({
+    zoomT, initialAnchor: 4, target: 30.0, ease: "linear",
+  });
+  const intensityZoom = useZoomDrivenControl({
+    zoomT, initialAnchor: 3.25, target: 0.15, ease: "cubic-easeOut",
+  });
+  // Shimmer-guard floor drops off quickly from the zoomed-in anchor and then
+  // hovers near 1.5 through the middle/late zoom range.
+  const minPointSizeZoom = useZoomDrivenControl({
+    zoomT, initialAnchor: 5, target: 1.5, ease: "cubic-easeOut",
+  });
+  // Glints are noticeable up close and fade out as the camera pulls back.
+  const shimmerSpikeAmpZoom = useZoomDrivenControl({
+    zoomT, initialAnchor: 4.65, target: 0, ease: "linear",
+  });
 
   const [{
     particlesPerEdge,
@@ -121,14 +132,9 @@ export function ParticleField({
     samplesPerCurve: { value: 64, min: 16, max: 256, step: 16 },
     pointSize: {
       value: 4, min: 0.5, max: 30, step: 0.1,
-      // Zoom-driven lerp: 2 at max zoom-in → 30.0 at max zoom-out. See
-      // `intensity` for the transient/anchor pattern this mirrors.
+      // Zoom-driven: anchor (zoom-in) → 30.0 (zoom-out), linear.
       transient: false,
-      onChange: (v: number, _path: string, ctx: { fromPanel?: boolean }) => {
-        if (!ctx.fromPanel) return;
-        const t = zoomT.current;
-        pointSizeAnchor.current = t < 0.99 ? (v - 30.0 * t) / (1 - t) : v;
-      },
+      onChange: pointSizeZoom.onChange,
     },
     tubeRadius: { value: 0, min: 0, max: 2.0, step: 0.01 },
     // Wisp: displacement from the curve spine is a dominant edge-local wind
@@ -188,13 +194,7 @@ export function ParticleField({
     minPointSize: {
       value: 1.5, min: 1.0, max: 8.0, step: 0.1, label: "min px (shimmer)",
       transient: false,
-      onChange: (v: number, _path: string, ctx: { fromPanel?: boolean }) => {
-        if (!ctx.fromPanel) return;
-        const t = zoomT.current;
-        const inv = 1 - t;
-        const tCurved = 1 - inv * inv * inv;
-        minPointSizeAnchor.current = tCurved < 0.99 ? (v - 1.5 * tCurved) / (1 - tCurved) : v;
-      },
+      onChange: minPointSizeZoom.onChange,
     },
     speedScale: { value: 0.32, min: 0, max: 3, step: 0.01 },
     intensity: {
@@ -203,19 +203,7 @@ export function ParticleField({
       // out of the returned object as soon as we attach an onChange, leaving
       // our useFrame reading `undefined`.
       transient: false,
-      // User drags = new "zoomed-in" anchor. The slider value is the lerped
-      // (effective) value at the current zoom, so to make a manual change
-      // stick at the current zoom we invert the lerp; near full zoom-out the
-      // inverse explodes, so fall back to using the value directly.
-      onChange: (v: number, _path: string, ctx: { fromPanel?: boolean }) => {
-        if (!ctx.fromPanel) return;
-        const t = zoomT.current;
-        // Must mirror the cubic curve used in useFrame so dragging the slider
-        // at any zoom inverts back to a consistent anchor.
-        const inv = 1 - t;
-        const tCurved = 1 - inv * inv * inv;
-        intensityAnchor.current = tCurved < 0.99 ? (v - 0.15 * tCurved) / (1 - tCurved) : v;
-      },
+      onChange: intensityZoom.onChange,
     },
     stableColor: "#8aa896",
     crisisColor: "#d06030",
@@ -227,11 +215,7 @@ export function ParticleField({
       shimmerSpikeAmp: {
         value: 4.65, min: 0, max: 10, step: 0.05, label: "spike amp",
         transient: false,
-        onChange: (v: number, _path: string, ctx: { fromPanel?: boolean }) => {
-          if (!ctx.fromPanel) return;
-          const t = zoomT.current;
-          shimmerSpikeAmpAnchor.current = t < 0.99 ? (v - 0.0 * t) / (1 - t) : v;
-        },
+        onChange: shimmerSpikeAmpZoom.onChange,
       },
       shimmerSharpness: { value: 34.5, min: 1, max: 60, step: 0.5, label: "spike sharpness" },
       shimmerSlowFreq: { value: 0.2, min: 0, max: 5, step: 0.05, label: "slow freq" },
@@ -591,46 +575,32 @@ export function ParticleField({
   useFrame((_, dt) => {
     uniforms.uTime.value += dt;
 
-    // Zoom-driven crossfade: anchor refs hold the user's "fully zoomed in"
-    // baselines; we lerp toward fixed "wide shot" targets (pointSize → 30.0,
-    // intensity → 0.7) as the camera pulls back. The result is written back
-    // to the leva sliders so the panel always shows the currently effective
-    // value. Distance range matches OrbitControls min/max in Scene.tsx.
+    // Zoom-driven crossfade: lerp each control between its anchor (zoom-in)
+    // and a fixed "wide shot" target as the camera pulls back; the result
+    // drives the uniform AND is written back into the leva slider so the
+    // panel shows the currently effective value. The hook owns the per-
+    // control easing curve. Distance range matches OrbitControls min/max
+    // in Scene.tsx.
     const target = (controls as { target?: THREE.Vector3 } | null)?.target ?? fallbackTarget;
     const dist = camera.position.distanceTo(target);
-    const t = THREE.MathUtils.clamp((dist - 2) / (60 - 2), 0, 1);
-    zoomT.current = t;
-    const nextPointSize = THREE.MathUtils.lerp(pointSizeAnchor.current, 30.0, t);
-    // Linear: spike-amp fades from anchor at zoom-in down to 0 at zoom-out.
-    const nextSpikeAmp = THREE.MathUtils.lerp(shimmerSpikeAmpAnchor.current, 0, t);
-    // Cubic ease-out: drops quickly off the zoomed-in anchor and then
-    // approaches the wide-shot value slowly through the middle and late
-    // zoom range. The same curve is applied in each control's onChange so
-    // panel drags "stick" at the current zoom. Used by `intensity` and
-    // `minPointSize`.
-    const inv = 1 - t;
-    const tCurved = 1 - inv * inv * inv;
-    const nextIntensity = THREE.MathUtils.lerp(intensityAnchor.current, 0.15, tCurved);
-    const nextMinPx = THREE.MathUtils.lerp(minPointSizeAnchor.current, 1.5, tCurved);
+    zoomT.current = THREE.MathUtils.clamp((dist - 2) / (60 - 2), 0, 1);
+
+    const nextPointSize = pointSizeZoom.compute();
+    const nextIntensity = intensityZoom.compute();
+    const nextMinPx = minPointSizeZoom.compute();
+    const nextSpikeAmp = shimmerSpikeAmpZoom.compute();
     uniforms.uPointSize.value = nextPointSize;
     uniforms.uIntensity.value = nextIntensity;
     uniforms.uMinPointSize.value = nextMinPx;
     uniforms.uShimmerSpikeAmp.value = nextSpikeAmp;
     // Only push to leva when the value actually moved — avoids re-rendering
     // (and re-running the leva-watch effect) every frame while the camera is
-    // still. 1e-4 is below the slider step for these controls.
-    if (Math.abs(nextPointSize - pointSize) > 1e-4) {
-      setParticles({ pointSize: nextPointSize });
-    }
-    if (Math.abs(nextIntensity - intensity) > 1e-4) {
-      setParticles({ intensity: nextIntensity });
-    }
-    if (Math.abs(nextMinPx - minPointSize) > 1e-4) {
-      setParticles({ minPointSize: nextMinPx });
-    }
-    if (Math.abs(nextSpikeAmp - shimmerSpikeAmp) > 1e-4) {
-      setParticles({ shimmerSpikeAmp: nextSpikeAmp });
-    }
+    // still.
+    const eps = ZOOM_PANEL_PUSH_EPSILON;
+    if (Math.abs(nextPointSize - pointSize) > eps) setParticles({ pointSize: nextPointSize });
+    if (Math.abs(nextIntensity - intensity) > eps) setParticles({ intensity: nextIntensity });
+    if (Math.abs(nextMinPx - minPointSize) > eps) setParticles({ minPointSize: nextMinPx });
+    if (Math.abs(nextSpikeAmp - shimmerSpikeAmp) > eps) setParticles({ shimmerSpikeAmp: nextSpikeAmp });
   });
 
   return (
