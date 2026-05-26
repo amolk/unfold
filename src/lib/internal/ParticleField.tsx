@@ -77,23 +77,15 @@ export function ParticleField({
     zoomT, initialAnchor: 4.65, target: 0, ease: "linear",
   });
 
-  // Build the uniforms object once per material lifetime — values are mutated
-  // in place when the leva controls change so the shader updates live without
-  // recompiling. Uniforms are created ONCE per mount and mutated in place.
-  // Rebuilding the object on timeline changes would reset uTime (visibly
-  // freezing animation) and force three.js to rebind every uniform — instead
-  // we keep the references stable and patch values via the effects below.
+  // Build the uniforms object once per material lifetime and mutate values in
+  // place. Rebuilding it on timeline changes would reset uTime (visibly
+  // freezing animation) and force three.js to rebind every uniform, so we
+  // keep the references stable and patch values via the effects below.
   //
-  // IMPORTANT: defaults for transient-onChange controls (most of them, wired
-  // up in the `useControls` factory below) MUST match the leva control's
-  // `value:` because leva does NOT call onChange on first mount. Out-of-sync
-  // defaults would silently start the shader with stale values until the
-  // first slider tweak. Defaults for controls that stay in the destructure
-  // (zoom-driven, colors, wind triple, burstEnable) are written on first
-  // render by the smaller mirror effect, so those can remain placeholders.
-  //
-  // Declared before `useControls` so the inline onChange closures in the
-  // factory can close over a fully-initialized `uniforms` binding.
+  // The values below are the live defaults — they're the only source of truth
+  // now that the Leva panels are gone (Phase 3 promotes a subset of them to
+  // `style.edge.*` props). Anything not yet re-exposed sits at its previous
+  // panel default here.
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },

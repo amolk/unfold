@@ -47,7 +47,11 @@ export function Scene({
 
   // Camera focus drives the per-node emphasis highlight and bulge tint. Until
   // controlled focus lands in Phase 7, the first node (the root) is focused —
-  // matching the original full-tree default (focusId = root).
+  // matching the original full-tree default (focusId = root). For arbitrary
+  // caller data the array's first node is NOT necessarily semantically the
+  // root; Phase 7 must replace this whole fallback with the `focusedNodeId`
+  // prop (default null/none) + an uncontrolled-mode internal state.
+  // TODO(phase-7): replace with the `focusedNodeId` prop.
   const focusId = data.nodes[0]?.id ?? "";
 
   const projection = useMemo(

@@ -4,6 +4,9 @@
 // public `theme`/`style` props; for now the library hardcodes them so the
 // extracted component renders identically to the original prototype.
 
+/** Canvas clear + fog color. Phase 3 wires this to `theme.background`. */
+export const DEFAULT_BACKGROUND = "#1a0810";
+
 /** Stable/crisis node colors — formerly the shared Theme panel in theme.ts. */
 export const DEFAULT_THEME = {
   stableColor: "#8CD0FF",
