@@ -33,6 +33,10 @@ varying float vKindMix;
 varying float vNodeProx;
 varying vec3  vNodeCol;
 varying float vIsGlint;
+// Per-particle base color, sampled in the vertex shader from the edge's
+// EdgeFlow palette (uEdgeColors) at this particle's aColorIndex. Replaces the
+// former kind-based stable/crisis mix + per-stream palette weave.
+varying vec3  vColor;
 // Stream identity, forwarded for downstream debugging — not currently read
 // here (the palette is selected via vPaletteIdx instead).
 varying float vStreamId;
@@ -78,16 +82,10 @@ void main() {
   float falloff = core + halo;
   float a = falloff * vAlpha * uIntensity;
 
-  vec3 col = mix(uStableColor, uCrisisColor, smoothstep(0.0, 1.0, vKindMix));
-  col *= 1.0 + 0.5 * vKindMix; // crisis particles run hotter
-
-  // Weave: blend in the stream's palette pigment over the stable/crisis base.
-  // Done before the node tint so node-near particles still take the node's
-  // color (consistent with the existing tint precedence).
-  vec3 paletteCol = vPaletteIdx < 0.5
-    ? uPaletteA
-    : (vPaletteIdx < 1.5 ? uPaletteB : uPaletteC);
-  col = mix(col, paletteCol, uWeaveAmount);
+  // Per-particle EdgeFlow color (set in the vertex shader). The up-to-8 colors
+  // declared on an edge are interleaved across its particles in the requested
+  // proportions, so this varies particle-to-particle within one edge.
+  vec3 col = vColor;
 
   // Near nodes, tint toward the node's color and crank brightness so the
   // accumulation reads as a glowing sphere and triggers bloom.

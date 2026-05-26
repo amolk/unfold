@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import { useControls } from "leva";
 import { Unfold } from "../lib";
-import { buildDemoData } from "./demo-data";
+import { applyFlowPreset, buildDemoData, type FlowPreset } from "./demo-data";
 import { useUnfoldStyleControls, useUnfoldThemeControls } from "./leva-panels";
 
 /** Catches render errors from the R3F tree and shows the stack inline, instead
@@ -46,14 +46,29 @@ class Boundary extends React.Component<
 export function App() {
   // "auto layout" off → caller supplies the prototype's hand-placed 3D
   // positions; on → caller omits positions/controls and the library lays the
-  // tree out with its layered algorithm.
-  const { autoLayout } = useControls("Demo", { autoLayout: false });
-  const data = useMemo(
+  // tree out with its layered algorithm. "edge flow" picks an EdgeFlow preset.
+  const { autoLayout, flowPreset } = useControls("Demo", {
+    autoLayout: false,
+    flowPreset: {
+      value: "single",
+      options: ["single", "two", "three", "eight"],
+      label: "edge flow",
+    },
+  });
+  const theme = useUnfoldThemeControls();
+  const style = useUnfoldStyleControls();
+
+  const baseData = useMemo(
     () => buildDemoData(9143, 4, { positioned: !autoLayout }),
     [autoLayout],
   );
-  const theme = useUnfoldThemeControls();
-  const style = useUnfoldStyleControls();
+  const stable = theme.categories?.stable ?? "#8CD0FF";
+  const crisis = theme.categories?.crisis ?? "#FFB060";
+  const data = useMemo(
+    () => applyFlowPreset(baseData, flowPreset as FlowPreset, [stable, crisis]),
+    [baseData, flowPreset, stable, crisis],
+  );
+
   return (
     <Boundary>
       <Unfold data={data} theme={theme} style={style} />

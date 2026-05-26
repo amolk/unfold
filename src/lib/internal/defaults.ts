@@ -58,6 +58,8 @@ export interface ResolvedTheme {
   background: string;
   stableColor: string;
   crisisColor: string;
+  /** Stream color for edges that carry no `flow` spec (Phase 5). */
+  defaultEdgeColor: string;
 }
 
 export interface ResolvedStyle {
@@ -89,6 +91,11 @@ export function resolveTheme(theme?: UnfoldTheme): ResolvedTheme {
     stableColor:
       categories?.stable ?? theme?.defaultNodeColor ?? DEFAULT_THEME.stableColor,
     crisisColor: categories?.crisis ?? DEFAULT_THEME.crisisColor,
+    defaultEdgeColor:
+      theme?.defaultEdgeColor ??
+      categories?.stable ??
+      theme?.defaultNodeColor ??
+      DEFAULT_THEME.stableColor,
   };
 }
 

@@ -108,6 +108,7 @@ export function ParticleField({
     () => ({
       uTime: { value: 0 },
       uCurves: { value: null as THREE.DataTexture | null },
+      uEdgeColors: { value: null as THREE.DataTexture | null },
       uEdgeFades: { value: null as THREE.DataTexture | null },
       uEdgeFadeTexHeight: { value: 1 },
       uCurveTexWidth: { value: 1 },
@@ -216,6 +217,33 @@ export function ParticleField({
     return tex;
   }, [timeline, samplesPerCurve]);
 
+  // --- bake the EdgeFlow palette into an 8×(edge count) RGBA texture ---
+  // Row = edge (matches the curve texture row / aCurveIndex), column = color
+  // slot 0..7. Empty slots repeat color 0 so an over-index reads a valid color.
+  const edgeColorTexture = useMemo(() => {
+    const h = Math.max(1, timeline.edges.length);
+    const data = new Float32Array(8 * h * 4);
+    const c = new THREE.Color();
+    for (let row = 0; row < timeline.edges.length; row++) {
+      const cols = timeline.edges[row].colors;
+      for (let s = 0; s < 8; s++) {
+        c.set(cols[s] ?? cols[0] ?? "#ffffff");
+        const i = (row * 8 + s) * 4;
+        data[i + 0] = c.r;
+        data[i + 1] = c.g;
+        data[i + 2] = c.b;
+        data[i + 3] = 1.0;
+      }
+    }
+    const tex = new THREE.DataTexture(data, 8, h, THREE.RGBAFormat, THREE.FloatType);
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    return tex;
+  }, [timeline]);
+
   // --- per-particle attribute buffers, distributed by edge weight ---
   // Total count scales linearly with the visible edge count so a small tree
   // and a complex tree end up at the same per-segment density.
@@ -229,6 +257,9 @@ export function ParticleField({
     const seed = new Float32Array(particleCount);
     const fromCrisis = new Float32Array(particleCount);
     const toCrisis = new Float32Array(particleCount);
+    // EdgeFlow color slot (0..7) per particle. Drawn from each edge's
+    // proportions so the declared color mix appears at the requested ratio.
+    const colorIndex = new Float32Array(particleCount);
     // Per-stream values: all particles assigned to the same stream share these
     // so they emerge from a consistent point on the curve's cross-section.
     const radialAngle = new Float32Array(particleCount);
@@ -245,6 +276,17 @@ export function ParticleField({
       const streamCount = Math.max(1, Math.min(streamsPerEdge, share));
       const fc = edge.fromKind === "crisis" ? 1 : 0;
       const tc = edge.toKind === "crisis" ? 1 : 0;
+      // Normalized cumulative distribution over this edge's flow proportions,
+      // capped at the 8 palette slots. pickColor() draws a slot per particle.
+      const props = edge.proportions.slice(0, 8);
+      const propTotal = props.reduce((s, x) => s + x, 0) || 1;
+      let acc = 0;
+      const cum = props.map((x) => (acc += x / propTotal));
+      const pickColor = () => {
+        const r = Math.random();
+        for (let i = 0; i < cum.length; i++) if (r <= cum[i]) return i;
+        return cum.length - 1;
+      };
       const speedBase = edge.toKind === "crisis" || edge.fromKind === "crisis" ? 0.045 : 0.06;
       // Distribute the edge's particle share evenly across streams, with the
       // remainder spilled into the first few streams.
@@ -270,6 +312,7 @@ export function ParticleField({
           seed[p] = Math.random() * 1000;
           fromCrisis[p] = fc;
           toCrisis[p] = tc;
+          colorIndex[p] = pickColor();
           radialAngle[p] = sAngle;
           radialRadius[p] = sRadius;
           streamId[p] = sid;
@@ -283,6 +326,7 @@ export function ParticleField({
       seed[p] = Math.random() * 1000;
       fromCrisis[p] = 0;
       toCrisis[p] = 0;
+      colorIndex[p] = 0;
       radialAngle[p] = Math.random() * Math.PI * 2;
       radialRadius[p] = Math.sqrt(Math.random());
       streamId[p] = globalStreamId;
@@ -297,6 +341,7 @@ export function ParticleField({
     geom.setAttribute("aSeed", new THREE.BufferAttribute(seed, 1));
     geom.setAttribute("aFromCrisis", new THREE.BufferAttribute(fromCrisis, 1));
     geom.setAttribute("aToCrisis", new THREE.BufferAttribute(toCrisis, 1));
+    geom.setAttribute("aColorIndex", new THREE.BufferAttribute(colorIndex, 1));
     geom.setAttribute("aRadialAngle", new THREE.BufferAttribute(radialAngle, 1));
     geom.setAttribute("aRadialRadius", new THREE.BufferAttribute(radialRadius, 1));
     geom.setAttribute("aStreamId", new THREE.BufferAttribute(streamId, 1));
@@ -324,6 +369,13 @@ export function ParticleField({
     uniforms.uCurveTexWidth.value = samplesPerCurve;
     uniforms.uCurveTexHeight.value = timeline.edges.length;
   }, [uniforms, curveTexture, samplesPerCurve, timeline.edges.length]);
+
+  // Point the EdgeFlow palette sampler at the freshly baked color texture.
+  // Its row count matches uCurveTexHeight, so the vertex shader reuses that
+  // uniform for the row coordinate.
+  useEffect(() => {
+    uniforms.uEdgeColors.value = edgeColorTexture;
+  }, [uniforms, edgeColorTexture]);
 
   useEffect(() => {
     uniforms.uEdgeFades.value = edgeFadeTexture;

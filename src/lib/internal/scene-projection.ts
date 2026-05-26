@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { Timeline, TimelineEdge, TimelineNode, NodeKind } from "./timeline";
-import type { UnfoldData, UnfoldLayout, Vec3 } from "../types";
+import type { UnfoldData, UnfoldEdge, UnfoldLayout, Vec3 } from "../types";
 import { layoutLayered } from "./layout/layered";
 import { deriveBezierControls } from "./layout/bezier";
 import {
@@ -35,6 +35,10 @@ export interface ProjEdge {
   fromKind: NodeKind;
   toKind: NodeKind;
   isStub: boolean;
+  /** Resolved EdgeFlow palette (1..8 colors) + matching positive weights.
+   *  Edges with no `flow` get [defaultEdgeColor] @ [1]. */
+  colors: string[];
+  proportions: number[];
 }
 
 export interface NormalizedScene {
@@ -53,9 +57,33 @@ const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
  *    resolved endpoint positions + `curvature` (default 0.4). Falls back to a
  *    straight/degenerate line when an endpoint is missing (e.g. a stub edge).
  *  - an edge whose `source` is not among the nodes is flagged `isStub`. */
+/** Resolve an edge's public `flow` into a concrete (colors, proportions) pair.
+ *  Missing/empty flow → a single default-colored stream. Colors are capped at
+ *  8; proportions are coerced to non-negative and fall back to equal weights
+ *  when absent, mismatched in length, or all zero. */
+function resolveFlow(
+  e: UnfoldEdge,
+  defaultEdgeColor: string,
+): { colors: string[]; proportions: number[] } {
+  const f = e.flow;
+  if (!f || !f.colors || f.colors.length === 0) {
+    return { colors: [defaultEdgeColor], proportions: [1] };
+  }
+  const colors = f.colors.slice(0, 8);
+  let proportions =
+    f.proportions && f.proportions.length === colors.length
+      ? f.proportions.map((p) => (p > 0 ? p : 0))
+      : colors.map(() => 1);
+  if (proportions.reduce((s, p) => s + p, 0) <= 0) {
+    proportions = colors.map(() => 1);
+  }
+  return { colors, proportions };
+}
+
 export function normalizeData(
   data: UnfoldData,
   layout: UnfoldLayout = "layered",
+  defaultEdgeColor = "#8CD0FF",
 ): NormalizedScene {
   // Only auto-layout when something needs it and the caller hasn't opted out.
   const needsLayout =
@@ -90,6 +118,7 @@ export function normalizeData(
     } else {
       controls = straightControls(from, to);
     }
+    const { colors, proportions } = resolveFlow(e, defaultEdgeColor);
     return {
       id: e.id,
       fromId: e.source,
@@ -99,6 +128,8 @@ export function normalizeData(
       fromKind: kindOf.get(e.source) ?? "stable",
       toKind: kindOf.get(e.target) ?? "stable",
       isStub: !kindOf.has(e.source),
+      colors,
+      proportions,
     };
   });
 
@@ -317,6 +348,8 @@ export class SceneProjection {
         weight: entry.edge.weight,
         fromKind: entry.edge.fromKind,
         toKind: entry.edge.toKind,
+        colors: entry.edge.colors,
+        proportions: entry.edge.proportions,
       };
     });
 

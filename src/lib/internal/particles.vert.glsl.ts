@@ -9,6 +9,11 @@ precision highp float;
 
 uniform float uTime;
 uniform sampler2D uCurves;
+// Per-edge EdgeFlow palette: 8×(edge count) RGBA. Row = edge (aCurveIndex),
+// column = color slot (aColorIndex, 0..7). Sampled per particle to give it its
+// base color; the 8-wide row holds the edge's declared colors (empty slots
+// repeat color 0 so an over-index is still safe).
+uniform sampler2D uEdgeColors;
 uniform sampler2D uEdgeFades;       // 1×uEdgeFadeTexHeight; R = per-edge fade (0..1)
 uniform float uEdgeFadeTexHeight;   // physical row count of uEdgeFades (fixed capacity)
 uniform float uCurveTexWidth;       // samples per curve
@@ -127,8 +132,10 @@ attribute float aToCrisis;
 attribute float aRadialAngle;   // per-stream (all particles in a stream share this)
 attribute float aRadialRadius;  // per-stream
 attribute float aStreamId;      // unique id of the stream this particle belongs to
+attribute float aColorIndex;    // EdgeFlow color slot (0..7) for this particle
 
 varying float vAlpha;
+varying vec3  vColor;            // per-particle base color from the edge palette
 varying float vKindMix;
 varying float vNodeProx;
 varying vec3  vNodeCol;
@@ -514,6 +521,14 @@ void main() {
   float zoneId = floor(aStreamId * uPaletteZoneScale);
   float zHash = fract(sin(zoneId * 91.317 + 7.91) * 43758.5453);
   vPaletteIdx = zHash < 0.70 ? 0.0 : (zHash < 0.85 ? 1.0 : 2.0);
+
+  // EdgeFlow base color: sample this particle's color slot from the edge's
+  // palette row. uCurveTexHeight is the active edge count = uEdgeColors height,
+  // so the row coordinate matches the curve-texture row for this curve.
+  vColor = texture2D(
+    uEdgeColors,
+    vec2((aColorIndex + 0.5) / 8.0, (aCurveIndex + 0.5) / uCurveTexHeight)
+  ).rgb;
 
   vec4 mv = modelViewMatrix * vec4(pos, 1.0);
   gl_Position = projectionMatrix * mv;

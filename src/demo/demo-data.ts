@@ -1,6 +1,47 @@
 import * as THREE from "three";
 import type { UnfoldData, UnfoldEdge, UnfoldNode, Vec3 } from "../lib";
 
+// --- EdgeFlow demo presets ------------------------------------------------
+
+export type FlowPreset = "single" | "two" | "three" | "eight";
+
+const RAINBOW = [
+  "#ff0040",
+  "#ff8000",
+  "#ffe000",
+  "#40ff00",
+  "#00ffd0",
+  "#0080ff",
+  "#6000ff",
+  "#ff00c0",
+];
+
+/** Attach a `flow` spec to every edge per the selected preset, so a single
+ *  toggle visibly switches the streams between one color, a 50/50 two-color
+ *  mix, a 60/30/10 three-color mix, and an even eight-color rainbow.
+ *  "single" leaves edges flow-less so the library falls back to its default
+ *  edge color. The two/three presets draw their primary colors from the
+ *  theme's stable/crisis pickers so they track the Theme panel. */
+export function applyFlowPreset(
+  data: UnfoldData,
+  preset: FlowPreset,
+  [stable, crisis]: [string, string],
+): UnfoldData {
+  if (preset === "single") return data;
+
+  const flow =
+    preset === "two"
+      ? { colors: [stable, crisis], proportions: [1, 1] }
+      : preset === "three"
+        ? { colors: [stable, crisis, "#e0a020"], proportions: [6, 3, 1] }
+        : { colors: RAINBOW, proportions: RAINBOW.map(() => 1) };
+
+  return {
+    nodes: data.nodes,
+    edges: data.edges.map((e) => ({ ...e, flow: { ...flow, colors: [...flow.colors] } })),
+  };
+}
+
 // Procedural tree generator for the demo. Ported from the original explorer
 // state machine (src/explorer/state.ts, full-tree mode) so the tracer-bullet
 // demo renders the same shape the prototype did. It is intentionally INLINED

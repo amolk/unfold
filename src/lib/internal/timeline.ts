@@ -19,6 +19,10 @@ export interface TimelineEdge {
   weight: number;
   fromKind: NodeKind;
   toKind: NodeKind;
+  // Resolved EdgeFlow palette: 1..8 hex colors and matching positive weights.
+  // The particle field interleaves them along the stream in these proportions.
+  colors: string[];
+  proportions: number[];
 }
 
 export interface Timeline {

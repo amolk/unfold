@@ -35,8 +35,12 @@ export function Scene({ data, theme, style, layout }: SceneProps) {
   const fadeSpeed = style.fade.speed;
   // Normalize the public data into the projection's internal shape. Re-run when
   // the data identity or layout strategy changes; auto-layout fills positions
-  // for any node missing one (unless layout="none").
-  const normalized = useMemo(() => normalizeData(data, layout), [data, layout]);
+  // for any node missing one (unless layout="none"), and each edge's flow is
+  // resolved to concrete colors (falling back to the theme's default edge color).
+  const normalized = useMemo(
+    () => normalizeData(data, layout, theme.defaultEdgeColor),
+    [data, layout, theme.defaultEdgeColor],
+  );
 
   // Camera focus drives the per-node emphasis highlight and bulge tint. Until
   // controlled focus lands in Phase 7, the first node (the root) is focused —
