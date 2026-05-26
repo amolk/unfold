@@ -41,8 +41,18 @@ interface GenNode {
 }
 
 /** Build a full tree to `depth` levels and return it as UnfoldData. Mirrors
- *  the explorer's `createExplorer({ mode: "full-tree" })` + child-fanning. */
-export function buildDemoData(seed = 9143, depth = 4): UnfoldData {
+ *  the explorer's `createExplorer({ mode: "full-tree" })` + child-fanning.
+ *
+ *  `positioned` (default true) emits explicit `position` on every node and
+ *  `controls` on every edge — the prototype's hand-placed 3D shape. Set it
+ *  false to omit both so the library's layered auto-layout takes over; the
+ *  cosmetic incoming stub edge is dropped in that mode since it's authored
+ *  relative to a root-at-origin the auto-layout doesn't guarantee. */
+export function buildDemoData(
+  seed = 9143,
+  depth = 4,
+  { positioned = true }: { positioned?: boolean } = {},
+): UnfoldData {
   const nodes = new Map<string, GenNode>();
   const edges: UnfoldEdge[] = [];
 
@@ -58,17 +68,19 @@ export function buildDemoData(seed = 9143, depth = 4): UnfoldData {
   // Stub edge flowing into the root from below, so the root has visible
   // incoming flow before its branches grow. Its `source` references no node,
   // so the library flags it as a stub and ramps its upstream end in.
-  edges.push({
-    id: "__stub__->0",
-    source: "__stub__",
-    target: "0",
-    controls: [
-      [0.0, -1.5, 0],
-      [0.08, -1.0, 0.03],
-      [0.03, -0.45, -0.03],
-      [0, 0, 0],
-    ],
-  });
+  if (positioned) {
+    edges.push({
+      id: "__stub__->0",
+      source: "__stub__",
+      target: "0",
+      controls: [
+        [0.0, -1.5, 0],
+        [0.08, -1.0, 0.03],
+        [0.03, -0.45, -0.03],
+        [0, 0, 0],
+      ],
+    });
+  }
 
   const expand = (node: GenNode, remaining: number) => {
     if (remaining <= 0) return;
@@ -112,7 +124,7 @@ export function buildDemoData(seed = 9143, depth = 4): UnfoldData {
         depth: node.depth + 1,
       };
       nodes.set(child.id, child);
-      edges.push(makeBezierEdge(node, child, rng));
+      edges.push(makeBezierEdge(node, child, rng, positioned));
       children.push(child);
     }
     for (const c of children) expand(c, remaining - 1);
@@ -122,8 +134,8 @@ export function buildDemoData(seed = 9143, depth = 4): UnfoldData {
 
   const outNodes: UnfoldNode[] = [...nodes.values()].map((n) => ({
     id: n.id,
-    position: tup(n.position),
     category: n.kind,
+    ...(positioned ? { position: tup(n.position) } : {}),
   }));
 
   return { nodes: outNodes, edges };
@@ -133,7 +145,13 @@ function makeBezierEdge(
   a: GenNode,
   b: GenNode,
   rng: () => number,
+  positioned: boolean,
 ): UnfoldEdge {
+  const base = { id: `${a.id}->${b.id}`, source: a.id, target: b.id };
+  // Auto-layout mode: hand back just the topology and let the library derive
+  // both positions and bezier controls.
+  if (!positioned) return base;
+
   const dir = b.position.clone().sub(a.position);
   const len = dir.length();
   const t1 = a.position.clone().addScaledVector(dir, 0.33);
@@ -151,9 +169,7 @@ function makeBezierEdge(
   t2.z += (rng() - 0.5) * 0.3;
 
   return {
-    id: `${a.id}->${b.id}`,
-    source: a.id,
-    target: b.id,
+    ...base,
     controls: [tup(a.position), tup(t1), tup(t2), tup(b.position)],
   };
 }

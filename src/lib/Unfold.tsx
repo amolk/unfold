@@ -22,10 +22,10 @@ function BloomFx() {
 
 /** Renders a graph through the extracted R3F scene.
  *
- *  Wired so far: `data` (Phase 2), `theme` + `style` (Phase 3). Every other
- *  prop on `UnfoldProps` is accepted for forward-compatible type-checking but
- *  is a no-op until the phase that lands its behavior:
- *    - `layout`                   → Phase 4
+ *  Wired so far: `data` (Phase 2), `theme` + `style` (Phase 3), `layout`
+ *  (Phase 4). Every other prop on `UnfoldProps` is accepted for
+ *  forward-compatible type-checking but is a no-op until the phase that lands
+ *  its behavior:
  *    - `onNode*` / `onEdge*` /
  *      `onBackgroundClick`        → Phase 6
  *    - `focusedNodeId`, `selectedNodeIds`,
@@ -37,7 +37,7 @@ function BloomFx() {
  *    - `ref` (UnfoldHandle)       → Phase 10
  *  Setting any of those today is silently ignored. */
 export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
-  { data, theme, style },
+  { data, theme, style, layout = "layered" },
   _ref,
 ) {
   const resolvedTheme = useMemo(() => resolveTheme(theme), [theme]);
@@ -55,7 +55,7 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
     >
       <color attach="background" args={[bg]} />
       <fog attach="fog" args={[bg, 10, 40]} />
-      <Scene data={data} theme={resolvedTheme} style={resolvedStyle} />
+      <Scene data={data} theme={resolvedTheme} style={resolvedStyle} layout={layout} />
       <BloomFx />
     </Canvas>
   );

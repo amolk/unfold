@@ -6,7 +6,7 @@ import { ParticleField } from "./ParticleField";
 import { Nodes } from "./Nodes";
 import { SceneProjection, normalizeData } from "./scene-projection";
 import type { ResolvedStyle, ResolvedTheme } from "./defaults";
-import type { UnfoldData } from "../types";
+import type { UnfoldData, UnfoldLayout } from "../types";
 
 // Hard cap for the shader's bulge loop and the height of the node-data
 // textures (and per-node fade attribute, and per-edge fade texture). The
@@ -25,15 +25,18 @@ interface SceneProps {
    *  props over the defaults before handing them down. */
   theme: ResolvedTheme;
   style: ResolvedStyle;
+  /** Layout strategy; "none" disables auto-layout for nodes missing position. */
+  layout: UnfoldLayout;
 }
 
-export function Scene({ data, theme, style }: SceneProps) {
+export function Scene({ data, theme, style, layout }: SceneProps) {
   const stableColor = theme.stableColor;
   const crisisColor = theme.crisisColor;
   const fadeSpeed = style.fade.speed;
-  // Normalize the public data into the projection's internal shape once per
-  // data identity. Static for the tracer bullet; diffed in later phases.
-  const normalized = useMemo(() => normalizeData(data), [data]);
+  // Normalize the public data into the projection's internal shape. Re-run when
+  // the data identity or layout strategy changes; auto-layout fills positions
+  // for any node missing one (unless layout="none").
+  const normalized = useMemo(() => normalizeData(data, layout), [data, layout]);
 
   // Camera focus drives the per-node emphasis highlight and bulge tint. Until
   // controlled focus lands in Phase 7, the first node (the root) is focused —

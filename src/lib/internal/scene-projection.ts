@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import type { Timeline, TimelineEdge, TimelineNode, NodeKind } from "./timeline";
-import type { UnfoldData, Vec3 } from "../types";
+import type { UnfoldData, UnfoldLayout, Vec3 } from "../types";
+import { layoutLayered } from "./layout/layered";
+import { deriveBezierControls } from "./layout/bezier";
 import {
   createMirroredAttribute,
   createMirroredTexture,
@@ -44,17 +46,29 @@ const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
 
 /** Project the public UnfoldData into the projection's internal shape.
  *  - `category === "crisis"` → crisis kind, else stable (Phase-2 color bridge).
- *  - missing `position` → origin placeholder (real layout lands in Phase 4).
- *  - edge `controls` used verbatim if present; otherwise a straight line
- *    between endpoints, or a degenerate point if an endpoint is missing.
+ *  - missing `position` → filled by layered auto-layout, unless `layout` is
+ *    "none" (then origin placeholder). The layout sees the whole graph so
+ *    multi-parent depth is consistent.
+ *  - edge `controls` used verbatim if present; otherwise derived from the
+ *    resolved endpoint positions + `curvature` (default 0.4). Falls back to a
+ *    straight/degenerate line when an endpoint is missing (e.g. a stub edge).
  *  - an edge whose `source` is not among the nodes is flagged `isStub`. */
-export function normalizeData(data: UnfoldData): NormalizedScene {
+export function normalizeData(
+  data: UnfoldData,
+  layout: UnfoldLayout = "layered",
+): NormalizedScene {
+  // Only auto-layout when something needs it and the caller hasn't opted out.
+  const needsLayout =
+    layout !== "none" && data.nodes.some((n) => !n.position);
+  const computed = needsLayout ? layoutLayered(data) : null;
+
   const kindOf = new Map<string, NodeKind>();
   const posOf = new Map<string, THREE.Vector3>();
 
   const nodes: ProjNode[] = data.nodes.map((n) => {
     const kind: NodeKind = n.category === "crisis" ? "crisis" : "stable";
-    const position = n.position ? v3(n.position) : new THREE.Vector3();
+    const tuple: Vec3 = n.position ?? computed?.get(n.id) ?? [0, 0, 0];
+    const position = v3(tuple);
     kindOf.set(n.id, kind);
     posOf.set(n.id, position);
     return { id: n.id, position, kind, depth: 0 };
@@ -63,9 +77,19 @@ export function normalizeData(data: UnfoldData): NormalizedScene {
   const edges: ProjEdge[] = data.edges.map((e) => {
     const from = posOf.get(e.source);
     const to = posOf.get(e.target);
-    const controls: Controls = e.controls
-      ? (e.controls.map(v3) as Controls)
-      : straightControls(from, to);
+    let controls: Controls;
+    if (e.controls) {
+      controls = e.controls.map(v3) as Controls;
+    } else if (from && to) {
+      const c = deriveBezierControls(
+        [from.x, from.y, from.z],
+        [to.x, to.y, to.z],
+        e.curvature ?? 0.4,
+      );
+      controls = c.map(v3) as Controls;
+    } else {
+      controls = straightControls(from, to);
+    }
     return {
       id: e.id,
       fromId: e.source,
