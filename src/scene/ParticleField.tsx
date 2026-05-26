@@ -508,7 +508,11 @@ export function ParticleField({
   }, [uniforms, edgeFadeTexture]);
 
   // Live-update scalar/color uniforms in place. Mutating the stable uniforms
-  // object also reaches the material because it shares the reference.
+  // object also reaches the material because it shares the reference. We
+  // intentionally don't list each leva value in the dep array — keeping a
+  // ~60-entry array in sync with the declarations above was a recurring bug
+  // surface. Running on every render is cheap (scalar writes; the uniforms
+  // object identity is stable).
   useEffect(() => {
     uniforms.uPointSize.value = pointSize;
     uniforms.uTubeRadius.value = tubeRadius;
@@ -566,7 +570,7 @@ export function ParticleField({
     uniforms.uPaletteA.value.set(paletteA);
     uniforms.uPaletteB.value.set(paletteB);
     uniforms.uPaletteC.value.set(paletteC);
-  }, [uniforms, pointSize, tubeRadius, wispAmp, wispStretch, wispMorphSpeed, edgeFlowSpread, streamPerturb, gustAmp, gustSpeed, wispOctave, pinHead, pinTail, tailBloom, nodeVolume, bunchFreq, bunchContrast, bunchTime, burstEnable, burstRate, streakAmp, minPointSize, speedScale, intensity, shimmerSpikeFreq, shimmerSpikeAmp, shimmerSharpness, shimmerSlowFreq, shimmerSlowAmp, shimmerDepth, stableColor, crisisColor, nodeRadius, nodeEmphRadius, nodeBulgeSize, nodeColorMix, nodeBoost, nodeDriftBoost, nodeSwirlStrength, nodeSwirlSpeed, nodeGravity, nodeCenterGravity, nodeCoreStrength, windX, windY, windZ, windStrength, windSpeed, glintRatio, glintSizeMult, glintIntensity, grainCore, grainHalo, grainHaloAmp, weaveAmount, paletteZoneScale, paletteA, paletteB, paletteC]);
+  });
 
   useEffect(() => {
     uniforms.uResolution.value.set(size.width, size.height);
