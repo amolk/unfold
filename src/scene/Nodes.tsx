@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { type ThreeEvent } from "@react-three/fiber";
 import { useControls } from "leva";
 import * as THREE from "three";
-import { Timeline } from "../timeline/generate";
+import { Timeline } from "../timeline/types";
 import { nodesVert } from "./nodes.vert.glsl";
 import { nodesFrag } from "./nodes.frag.glsl";
 

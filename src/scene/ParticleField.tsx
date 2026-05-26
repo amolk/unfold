@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useControls, folder } from "leva";
 import * as THREE from "three";
-import { Timeline, sampleBezier } from "../timeline/generate";
+import { Timeline, sampleBezier } from "../timeline/types";
 import { particlesVert } from "./particles.vert.glsl";
 import { particlesFrag } from "./particles.frag.glsl";
 import type { NodeBulgeData } from "./scene-projection";

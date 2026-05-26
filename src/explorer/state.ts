@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { NodeKind } from "../timeline/generate";
+import type { NodeKind } from "../timeline/types";
 
 export type { NodeKind };
 

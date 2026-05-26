@@ -5,7 +5,7 @@ import type {
   VisibleScene,
 } from "../explorer/state";
 import { STUB_FROM_ID } from "../explorer/state";
-import type { Timeline, TimelineEdge, TimelineNode } from "../timeline/generate";
+import type { Timeline, TimelineEdge, TimelineNode } from "../timeline/types";
 import {
   createMirroredAttribute,
   createMirroredTexture,
