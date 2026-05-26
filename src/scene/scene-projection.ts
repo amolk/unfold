@@ -125,11 +125,9 @@ export class SceneProjection {
    *  cross the visibility threshold. */
   sync(visible: VisibleScene): boolean {
     const visNodeIds = new Set<string>();
-    for (const n of visible.pathNodes) visNodeIds.add(n.id);
-    for (const n of visible.candidateNodes) visNodeIds.add(n.id);
+    for (const n of visible.nodes) visNodeIds.add(n.id);
     const visEdgeIds = new Set<string>();
-    for (const e of visible.pathEdges) visEdgeIds.add(e.id);
-    for (const e of visible.candidateEdges) visEdgeIds.add(e.id);
+    for (const e of visible.edges) visEdgeIds.add(e.id);
 
     let topologyChanged = false;
 
@@ -146,7 +144,7 @@ export class SceneProjection {
       }
     }
 
-    const upsertNode = (n: ExplorerNode) => {
+    for (const n of visible.nodes) {
       const existing = this.nodes.get(n.id);
       if (existing) {
         existing.target = 1;
@@ -159,14 +157,12 @@ export class SceneProjection {
         this.nodes.set(n.id, { node: n, target: 1, fade: 1, index: -1 });
         topologyChanged = true;
       }
-    };
-    visible.pathNodes.forEach(upsertNode);
-    visible.candidateNodes.forEach(upsertNode);
+    }
     for (const entry of this.nodes.values()) {
       if (!visNodeIds.has(entry.node.id)) entry.target = 0;
     }
 
-    const upsertEdge = (e: ExplorerEdge) => {
+    for (const e of visible.edges) {
       const existing = this.edges.get(e.id);
       if (existing) {
         existing.target = 1;
@@ -175,9 +171,7 @@ export class SceneProjection {
         this.edges.set(e.id, { edge: e, target: 1, fade: 0, index: -1 });
         topologyChanged = true;
       }
-    };
-    visible.pathEdges.forEach(upsertEdge);
-    visible.candidateEdges.forEach(upsertEdge);
+    }
     for (const entry of this.edges.values()) {
       if (!visEdgeIds.has(entry.edge.id)) entry.target = 0;
     }

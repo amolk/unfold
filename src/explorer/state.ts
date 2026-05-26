@@ -259,54 +259,48 @@ function makeBezierEdge(
 
 // --- queries -------------------------------------------------------------
 
-export function getPath(state: ExplorerState): ExplorerNode[] {
-  const path: ExplorerNode[] = [];
-  let cur: ExplorerNode | undefined = state.nodes.get(state.focusId);
-  while (cur) {
-    path.unshift(cur);
-    cur = cur.parentId ? state.nodes.get(cur.parentId) : undefined;
-  }
-  return path;
-}
-
-export function getCandidates(state: ExplorerState): ExplorerNode[] {
-  const focus = state.nodes.get(state.focusId);
-  if (!focus || !focus.childIds) return [];
-  return focus.childIds.map((id) => state.nodes.get(id)!).filter(Boolean);
-}
-
+/** What the renderer should currently show. Scene treats nodes and edges
+ *  uniformly — earlier revisions split this into path/candidate buckets, but
+ *  every consumer concatenated them, so the split was removed. */
 export interface VisibleScene {
-  pathNodes: ExplorerNode[];        // root → focus
-  candidateNodes: ExplorerNode[];   // focus's children
-  pathEdges: ExplorerEdge[];        // edges along the path
-  candidateEdges: ExplorerEdge[];   // focus → each candidate
+  nodes: ExplorerNode[];
+  edges: ExplorerEdge[];
   focusId: string;
 }
 
 export function getVisibleScene(state: ExplorerState): VisibleScene {
-  // The pathNodes/candidateNodes/pathEdges/candidateEdges split is purely a
-  // historical labeling — Scene treats both node buckets and both edge
-  // buckets the same way. We keep the split so future code can re-introduce a
-  // distinction; for toggle/full-tree modes we just dump everything into the
-  // "path" buckets.
   const stub = state.edges.get(`${STUB_FROM_ID}->${state.rootId}`);
+  const nodes: ExplorerNode[] = [];
+  const edges: ExplorerEdge[] = [];
+  if (stub) edges.push(stub);
 
   if (state.mode === "single-path") {
-    const pathNodes = getPath(state);
-    const candidateNodes = getCandidates(state);
-    const pathEdges: ExplorerEdge[] = [];
-    if (stub) pathEdges.push(stub);
-    for (let i = 1; i < pathNodes.length; i++) {
-      const e = state.edges.get(`${pathNodes[i - 1].id}->${pathNodes[i].id}`);
-      if (e) pathEdges.push(e);
+    // Walk root → focus, pushing each node and the edge into it.
+    let cur: ExplorerNode | undefined = state.nodes.get(state.focusId);
+    const path: ExplorerNode[] = [];
+    while (cur) {
+      path.unshift(cur);
+      cur = cur.parentId ? state.nodes.get(cur.parentId) : undefined;
     }
-    const focus = state.nodes.get(state.focusId)!;
-    const candidateEdges: ExplorerEdge[] = [];
-    for (const cid of focus.childIds ?? []) {
-      const e = state.edges.get(`${focus.id}->${cid}`);
-      if (e) candidateEdges.push(e);
+    for (let i = 0; i < path.length; i++) {
+      nodes.push(path[i]);
+      if (i > 0) {
+        const e = state.edges.get(`${path[i - 1].id}->${path[i].id}`);
+        if (e) edges.push(e);
+      }
     }
-    return { pathNodes, candidateNodes, pathEdges, candidateEdges, focusId: state.focusId };
+    // Then the focus's direct children (the candidate fan).
+    const focus = state.nodes.get(state.focusId);
+    if (focus?.childIds) {
+      for (const cid of focus.childIds) {
+        const child = state.nodes.get(cid);
+        if (!child) continue;
+        nodes.push(child);
+        const e = state.edges.get(`${focus.id}->${cid}`);
+        if (e) edges.push(e);
+      }
+    }
+    return { nodes, edges, focusId: state.focusId };
   }
 
   // toggle + full-tree: walk the tree, including every node reachable via
@@ -317,10 +311,6 @@ export function getVisibleScene(state: ExplorerState): VisibleScene {
     // toggle: descend only if the node has been expanded by the user.
     return state.expanded.has(node.id);
   };
-
-  const nodes: ExplorerNode[] = [];
-  const edges: ExplorerEdge[] = [];
-  if (stub) edges.push(stub);
 
   const root = state.nodes.get(state.rootId);
   if (root) {
@@ -339,11 +329,5 @@ export function getVisibleScene(state: ExplorerState): VisibleScene {
     }
   }
 
-  return {
-    pathNodes: nodes,
-    candidateNodes: [],
-    pathEdges: edges,
-    candidateEdges: [],
-    focusId: state.focusId,
-  };
+  return { nodes, edges, focusId: state.focusId };
 }
