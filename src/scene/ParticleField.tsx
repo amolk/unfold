@@ -470,7 +470,7 @@ export function ParticleField({
       paletteB: { value: "#1a6db0", label: "B (accent)" },
       paletteC: { value: "#e0a020", label: "C (accent)" },
     }),
-  })) as any;
+  }));
 
   // --- bake curves into a DataTexture (rows = curves, cols = samples) ---
   const curveTexture = useMemo(() => {
