@@ -9,9 +9,10 @@ precision highp float;
 
 uniform float uTime;
 uniform sampler2D uCurves;
-uniform sampler2D uEdgeFades;   // 1×N texture, R = current per-edge fade (0..1)
-uniform float uCurveTexWidth;   // samples per curve
-uniform float uCurveTexHeight;  // number of curves
+uniform sampler2D uEdgeFades;       // 1×uEdgeFadeTexHeight; R = per-edge fade (0..1)
+uniform float uEdgeFadeTexHeight;   // physical row count of uEdgeFades (fixed capacity)
+uniform float uCurveTexWidth;       // samples per curve
+uniform float uCurveTexHeight;      // number of curves (= active edge count, sized to fit)
 uniform float uPointSize;
 // Wisp formulation: particles are grouped into streams (aStreamId), and the
 // displacement from the curve spine is sampled from a 3D noise volume indexed
@@ -311,7 +312,10 @@ void main() {
   // aSeed; particles whose threshold exceeds the current fade are dropped.
   // This gives a gradual "thinning" of the branch as the fade animates from
   // 1 → 0 (or fills in 0 → 1) rather than a uniform dim.
-  vec4 edgeFadeSample = texture2D(uEdgeFades, vec2(0.5, (aCurveIndex + 0.5) / uCurveTexHeight));
+  // uEdgeFades is fixed-capacity (height = uEdgeFadeTexHeight, NOT
+  // uCurveTexHeight which tracks the active edge count). Sampling by row
+  // index aCurveIndex means dividing by the texture physical height.
+  vec4 edgeFadeSample = texture2D(uEdgeFades, vec2(0.5, (aCurveIndex + 0.5) / uEdgeFadeTexHeight));
   float edgeFade = edgeFadeSample.r;
   float entryRamp = edgeFadeSample.g; // 1 on edges that should dissolve from life=0
   float dropThreshold = fract(aSeed * 0.13782 + 0.317);

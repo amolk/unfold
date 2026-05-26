@@ -415,6 +415,7 @@ export function ParticleField({
       uTime: { value: 0 },
       uCurves: { value: null as THREE.DataTexture | null },
       uEdgeFades: { value: null as THREE.DataTexture | null },
+      uEdgeFadeTexHeight: { value: 1 },
       uCurveTexWidth: { value: 1 },
       uCurveTexHeight: { value: 1 },
       uPointSize: { value: 1 },
@@ -514,6 +515,12 @@ export function ParticleField({
 
   useEffect(() => {
     uniforms.uEdgeFades.value = edgeFadeTexture;
+    // Sample UV math in the shader divides by this row count (NOT by
+    // uCurveTexHeight, which tracks the active edge count and is correct
+    // for the per-edge curve texture but not for the fixed-capacity
+    // edge-fade texture). Reading off .image.height keeps this in sync
+    // with whatever the projection allocates.
+    uniforms.uEdgeFadeTexHeight.value = edgeFadeTexture.image.height;
   }, [uniforms, edgeFadeTexture]);
 
   // Live-update scalar/color uniforms in place. Mutating the stable uniforms
