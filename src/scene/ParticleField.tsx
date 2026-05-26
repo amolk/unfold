@@ -61,65 +61,130 @@ export function ParticleField({
     zoomT, initialAnchor: 4.65, target: 0, ease: "linear",
   });
 
+  // Build the uniforms object once per material lifetime — values are mutated
+  // in place when the leva controls change so the shader updates live without
+  // recompiling. Uniforms are created ONCE per mount and mutated in place.
+  // Rebuilding the object on timeline changes would reset uTime (visibly
+  // freezing animation) and force three.js to rebind every uniform — instead
+  // we keep the references stable and patch values via the effects below.
+  //
+  // IMPORTANT: defaults for transient-onChange controls (most of them, wired
+  // up in the `useControls` factory below) MUST match the leva control's
+  // `value:` because leva does NOT call onChange on first mount. Out-of-sync
+  // defaults would silently start the shader with stale values until the
+  // first slider tweak. Defaults for controls that stay in the destructure
+  // (zoom-driven, colors, wind triple, burstEnable) are written on first
+  // render by the smaller mirror effect, so those can remain placeholders.
+  //
+  // Declared before `useControls` so the inline onChange closures in the
+  // factory can close over a fully-initialized `uniforms` binding.
+  const uniforms = useMemo(
+    () => ({
+      uTime: { value: 0 },
+      uCurves: { value: null as THREE.DataTexture | null },
+      uEdgeFades: { value: null as THREE.DataTexture | null },
+      uEdgeFadeTexHeight: { value: 1 },
+      uCurveTexWidth: { value: 1 },
+      uCurveTexHeight: { value: 1 },
+      uPointSize: { value: 1 },
+      uTubeRadius: { value: 0 },
+      uWispAmp: { value: 0.15 },
+      uWispStretch: { value: 0.7 },
+      uWispMorphSpeed: { value: 0 },
+      uEdgeFlowSpread: { value: 0 },
+      uStreamPerturb: { value: 0.96 },
+      uGustAmp: { value: 0 },
+      uGustSpeed: { value: 0 },
+      uWispOctave: { value: 0.08 },
+      uPinHead: { value: 0 },
+      uPinTail: { value: 0 },
+      uTailBloom: { value: 0 },
+      uNodeVolume: { value: 0.07 },
+      uBunchFreq: { value: 0 },
+      uBunchContrast: { value: 0 },
+      uBunchTime: { value: 0 },
+      uBurstEnable: { value: 0 },
+      uBurstRate: { value: 60 },
+      uStreakAmp: { value: 0.6 },
+      uMinPointSize: { value: 1 },
+      uSpeedScale: { value: 0.32 },
+      uIntensity: { value: 0.1 },
+      uResolution: { value: new THREE.Vector2(1, 1) },
+      uStableColor: { value: new THREE.Color() },
+      uCrisisColor: { value: new THREE.Color() },
+      uShimmerSpikeFreq: { value: 1.1 },
+      uShimmerSpikeAmp: { value: 0 },
+      uShimmerSharpness: { value: 34.5 },
+      uShimmerSlowFreq: { value: 0.2 },
+      uShimmerSlowAmp: { value: 0.1 },
+      uShimmerDepth: { value: 1.0 },
+      // Bulge: data textures + count. Backing Float32Arrays are wrapped by
+      // DataTextures owned by the parent and mutated each frame; we point the
+      // sampler uniforms at the textures. Going through textures (rather than
+      // uniform arrays) avoids MAX_VERTEX_UNIFORM_VECTORS limits on the GPU,
+      // so we can scale to thousands of nodes.
+      uNodeCount: { value: 0 },
+      uNodePosFadeTex: { value: nodeBulge.posFade.texture },
+      uNodeColorEmphTex: { value: nodeBulge.colorEmph.texture },
+      uNodeTexHeight: { value: nodeBulge.texHeight },
+      uNodeRadius: { value: 0.13 },
+      uNodeEmphRadius: { value: 0.14 },
+      uNodeBulgeSize: { value: 0 },
+      uNodeColorMix: { value: 0 },
+      uNodeBoost: { value: 0 },
+      uNodeDriftBoost: { value: 0 },
+      uNodeSwirlStrength: { value: 0 },
+      uNodeSwirlSpeed: { value: 0 },
+      uNodeGravity: { value: 0 },
+      uNodeCenterGravity: { value: -0.22 },
+      uNodeCoreStrength: { value: 0 },
+      uWindDir: { value: new THREE.Vector3() },
+      uWindStrength: { value: 0.04 },
+      uWindSpeed: { value: 0.3 },
+      uGlintRatio: { value: 0.03 },
+      uGlintSizeMult: { value: 4 },
+      uGlintIntensity: { value: 1 },
+      uGrainCore: { value: 80 },
+      uGrainHalo: { value: 8.7 },
+      uGrainHaloAmp: { value: 0 },
+      uWeaveAmount: { value: 1.0 },
+      uPaletteZoneScale: { value: 0.42 },
+      uPaletteA: { value: new THREE.Color() },
+      uPaletteB: { value: new THREE.Color() },
+      uPaletteC: { value: new THREE.Color() },
+    }),
+    // The bulge arrays only change identity when Scene rebuilds them; otherwise
+    // we just mutate in place. We don't list nodeBulge here because creating
+    // new uniform objects on every render would re-bind every frame.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  // Most controls below attach a transient `onChange` that writes straight
+  // to the uniform — no destructure entry, so slider drags don't re-render
+  // this component. The destructure keeps only the controls that other code
+  // genuinely needs to read on every render:
+  //   - geometry-coupled (particlesPerEdge, streamsPerEdge, samplesPerCurve)
+  //     for useMemo deps
+  //   - zoom-driven (pointSize, intensity, minPointSize, shimmerSpikeAmp)
+  //     for the per-frame diff push in useFrame
+  //   - non-scalar conversions kept explicit in the mirror effect
+  //     (burstEnable bool→0/1, stableColor, crisisColor, wind triple → Vector3,
+  //     paletteA/B/C)
   const [{
     particlesPerEdge,
     streamsPerEdge,
     samplesPerCurve,
     pointSize,
-    tubeRadius,
-    wispAmp,
-    wispStretch,
-    wispMorphSpeed,
-    edgeFlowSpread,
-    streamPerturb,
-    gustAmp,
-    gustSpeed,
-    wispOctave,
-    pinHead,
-    pinTail,
-    tailBloom,
-    nodeVolume,
-    bunchFreq,
-    bunchContrast,
-    bunchTime,
     burstEnable,
-    burstRate,
-    streakAmp,
     minPointSize,
-    speedScale,
     intensity,
     stableColor,
     crisisColor,
-    shimmerSpikeFreq,
     shimmerSpikeAmp,
-    shimmerSharpness,
-    shimmerSlowFreq,
-    shimmerSlowAmp,
-    shimmerDepth,
-    nodeBulgeSize,
-    nodeRadius,
-    nodeEmphRadius,
-    nodeColorMix,
-    nodeBoost,
-    nodeDriftBoost,
-    nodeSwirlStrength,
-    nodeSwirlSpeed,
-    nodeGravity,
-    nodeCenterGravity,
-    nodeCoreStrength,
     windX,
     windY,
     windZ,
-    windStrength,
-    windSpeed,
-    glintRatio,
-    glintSizeMult,
-    glintIntensity,
-    grainCore,
-    grainHalo,
-    grainHaloAmp,
-    weaveAmount,
-    paletteZoneScale,
     paletteA,
     paletteB,
     paletteC,
@@ -136,52 +201,106 @@ export function ParticleField({
       transient: false,
       onChange: pointSizeZoom.onChange,
     },
-    tubeRadius: { value: 0, min: 0, max: 2.0, step: 0.01 },
+    tubeRadius: {
+      value: 0, min: 0, max: 2.0, step: 0.01,
+      onChange: (v: number) => { uniforms.uTubeRadius.value = v; },
+    },
     // Wisp: displacement from the curve spine is a dominant edge-local wind
     // (shared by all streams on the edge → adjacent threads curve together
     // into one wisp) plus a small per-stream perturbation (thread identity).
     // Gusts modulate the wind strength over time so the wisp pushes sideways
     // in bursts instead of swaying uniformly. Defaults captured from a tuned
     // max-zoom-out look.
-    wispAmp: { value: 0.15, min: 0, max: 3.0, step: 0.01, label: "wisp amp" },
-    wispStretch: { value: 0.7, min: 0.1, max: 20.0, step: 0.1, label: "wisp stretch" },
-    wispMorphSpeed: { value: 0, min: 0, max: 1.0, step: 0.005, label: "morph speed" },
-    edgeFlowSpread: { value: 0, min: 0, max: 5.0, step: 0.01, label: "edge spread" },
-    streamPerturb: { value: 0.96, min: 0, max: 1.0, step: 0.01, label: "thread detail" },
-    gustAmp: { value: 0, min: 0, max: 2.0, step: 0.01, label: "gust amp" },
-    gustSpeed: { value: 0, min: 0, max: 3.0, step: 0.01, label: "gust speed" },
-    wispOctave: { value: 0.08, min: 0, max: 1.5, step: 0.01, label: "fine octave" },
+    wispAmp: {
+      value: 0.15, min: 0, max: 3.0, step: 0.01, label: "wisp amp",
+      onChange: (v: number) => { uniforms.uWispAmp.value = v; },
+    },
+    wispStretch: {
+      value: 0.7, min: 0.1, max: 20.0, step: 0.1, label: "wisp stretch",
+      onChange: (v: number) => { uniforms.uWispStretch.value = v; },
+    },
+    wispMorphSpeed: {
+      value: 0, min: 0, max: 1.0, step: 0.005, label: "morph speed",
+      onChange: (v: number) => { uniforms.uWispMorphSpeed.value = v; },
+    },
+    edgeFlowSpread: {
+      value: 0, min: 0, max: 5.0, step: 0.01, label: "edge spread",
+      onChange: (v: number) => { uniforms.uEdgeFlowSpread.value = v; },
+    },
+    streamPerturb: {
+      value: 0.96, min: 0, max: 1.0, step: 0.01, label: "thread detail",
+      onChange: (v: number) => { uniforms.uStreamPerturb.value = v; },
+    },
+    gustAmp: {
+      value: 0, min: 0, max: 2.0, step: 0.01, label: "gust amp",
+      onChange: (v: number) => { uniforms.uGustAmp.value = v; },
+    },
+    gustSpeed: {
+      value: 0, min: 0, max: 3.0, step: 0.01, label: "gust speed",
+      onChange: (v: number) => { uniforms.uGustSpeed.value = v; },
+    },
+    wispOctave: {
+      value: 0.08, min: 0, max: 1.5, step: 0.01, label: "fine octave",
+      onChange: (v: number) => { uniforms.uWispOctave.value = v; },
+    },
     // Pin ends: head and tail are independent so the tail can bloom outward
     // (sand peeling off the brush tip) while the head stays tied to its
     // source node. Combined with `node volume` below, segments meeting at a
     // node form a small 3D ball rather than a mathematical point — keep the
     // matching end's pin > 0 to preserve that.
-    pinHead: { value: 0, min: 0, max: 0.5, step: 0.01, label: "pin head" },
-    pinTail: { value: 0, min: 0, max: 0.5, step: 0.01, label: "pin tail" },
+    pinHead: {
+      value: 0, min: 0, max: 0.5, step: 0.01, label: "pin head",
+      onChange: (v: number) => { uniforms.uPinHead.value = v; },
+    },
+    pinTail: {
+      value: 0, min: 0, max: 0.5, step: 0.01, label: "pin tail",
+      onChange: (v: number) => { uniforms.uPinTail.value = v; },
+    },
     // Tail bloom: scales wisp drift up over the back half of life so the
     // trailing end fans wider than the head. 0 = uniform amplitude.
-    tailBloom: { value: 0, min: 0, max: 4, step: 0.05, label: "tail bloom" },
+    tailBloom: {
+      value: 0, min: 0, max: 4, step: 0.05, label: "tail bloom",
+      onChange: (v: number) => { uniforms.uTailBloom.value = v; },
+    },
     // Node volume: radius of the per-stream parking ball that takes over as
     // the pinch closes. 0 = collapse to spine point; higher = larger node
     // blob. Particles converging from any segment meeting at the same world
     // position fill the same ball, so nodes read as 3D volumes.
-    nodeVolume: { value: 0.07, min: 0, max: 0.5, step: 0.005, label: "node volume" },
+    nodeVolume: {
+      value: 0.07, min: 0, max: 0.5, step: 0.005, label: "node volume",
+      onChange: (v: number) => { uniforms.uNodeVolume.value = v; },
+    },
     // Bursty emission: gate alpha by a noise function indexed by
     // (streamId, life, time). Adjacent particles share the gate so bursts
     // read as coherent clumps moving through each stream, not per-particle
     // flicker. uBunchTime drifts the burst pattern over time.
-    bunchFreq: { value: 0, min: 0, max: 40, step: 0.5, label: "bunch freq" },
-    bunchContrast: { value: 0, min: 0, max: 1, step: 0.01, label: "bunch contrast" },
-    bunchTime: { value: 0, min: 0, max: 3, step: 0.01, label: "bunch drift" },
+    bunchFreq: {
+      value: 0, min: 0, max: 40, step: 0.5, label: "bunch freq",
+      onChange: (v: number) => { uniforms.uBunchFreq.value = v; },
+    },
+    bunchContrast: {
+      value: 0, min: 0, max: 1, step: 0.01, label: "bunch contrast",
+      onChange: (v: number) => { uniforms.uBunchContrast.value = v; },
+    },
+    bunchTime: {
+      value: 0, min: 0, max: 3, step: 0.01, label: "bunch drift",
+      onChange: (v: number) => { uniforms.uBunchTime.value = v; },
+    },
     // Burst gating: each stream emits rand(100..500) points continuously,
     // pauses for rand(200..700) points' worth of time, then repeats — both
     // re-rolled per cycle, per stream. Rate sets points/sec per stream.
     burstEnable: { value: false, label: "burst on/off" },
-    burstRate: { value: 60, min: 1, max: 500, step: 1, label: "burst rate (pts/s)" },
+    burstRate: {
+      value: 60, min: 1, max: 500, step: 1, label: "burst rate (pts/s)",
+      onChange: (v: number) => { uniforms.uBurstRate.value = v; },
+    },
     // Motion-blur streak: enlarge each point sprite along the screen-space
     // curve tangent and elongate the visible region into an ellipse aligned
     // with motion. 0 = round grain (original look).
-    streakAmp: { value: 0.6, min: 0, max: 8, step: 0.05, label: "streak" },
+    streakAmp: {
+      value: 0.6, min: 0, max: 8, step: 0.05, label: "streak",
+      onChange: (v: number) => { uniforms.uStreakAmp.value = v; },
+    },
     // Sub-pixel shimmer guard. When the intended gl_PointSize would drop
     // below this value (in pixels), we clamp the size and dim the alpha by
     // the squared coverage ratio. Keeps very small particles stable instead
@@ -196,7 +315,10 @@ export function ParticleField({
       transient: false,
       onChange: minPointSizeZoom.onChange,
     },
-    speedScale: { value: 0.32, min: 0, max: 3, step: 0.01 },
+    speedScale: {
+      value: 0.32, min: 0, max: 3, step: 0.01,
+      onChange: (v: number) => { uniforms.uSpeedScale.value = v; },
+    },
     intensity: {
       value: 3.25, min: 1.5, max: 6, step: 0.005,
       // `transient: false` is critical here — without it leva drops the value
@@ -208,7 +330,10 @@ export function ParticleField({
     stableColor: "#8aa896",
     crisisColor: "#d06030",
     Shimmer: folder({
-      shimmerSpikeFreq: { value: 1.1, min: 0, max: 20, step: 0.1, label: "spike freq" },
+      shimmerSpikeFreq: {
+        value: 1.1, min: 0, max: 20, step: 0.1, label: "spike freq",
+        onChange: (v: number) => { uniforms.uShimmerSpikeFreq.value = v; },
+      },
       // Zoom-driven (linear): lerps from anchor at zoom-in down to 0 at
       // zoom-out. The slider shows the currently effective value; dragging
       // it sets a new anchor via the inverse-lerp pattern.
@@ -217,55 +342,130 @@ export function ParticleField({
         transient: false,
         onChange: shimmerSpikeAmpZoom.onChange,
       },
-      shimmerSharpness: { value: 34.5, min: 1, max: 60, step: 0.5, label: "spike sharpness" },
-      shimmerSlowFreq: { value: 0.2, min: 0, max: 5, step: 0.05, label: "slow freq" },
-      shimmerSlowAmp: { value: 0.1, min: 0, max: 1, step: 0.01, label: "slow amp" },
-      shimmerDepth: { value: 1.0, min: 0, max: 1, step: 0.01, label: "depth" },
+      shimmerSharpness: {
+        value: 34.5, min: 1, max: 60, step: 0.5, label: "spike sharpness",
+        onChange: (v: number) => { uniforms.uShimmerSharpness.value = v; },
+      },
+      shimmerSlowFreq: {
+        value: 0.2, min: 0, max: 5, step: 0.05, label: "slow freq",
+        onChange: (v: number) => { uniforms.uShimmerSlowFreq.value = v; },
+      },
+      shimmerSlowAmp: {
+        value: 0.1, min: 0, max: 1, step: 0.01, label: "slow amp",
+        onChange: (v: number) => { uniforms.uShimmerSlowAmp.value = v; },
+      },
+      shimmerDepth: {
+        value: 1.0, min: 0, max: 1, step: 0.01, label: "depth",
+        onChange: (v: number) => { uniforms.uShimmerDepth.value = v; },
+      },
     }),
     "Node bulge": folder({
-      nodeRadius: { value: 0.13, min: 0.05, max: 3, step: 0.01, label: "radius" },
-      nodeEmphRadius: { value: 0.14, min: 0.05, max: 4, step: 0.01, label: "focus radius" },
-      nodeBulgeSize: { value: 0, min: 0, max: 15, step: 0.1, label: "size boost" },
-      nodeColorMix: { value: 0, min: 0, max: 1, step: 0.01, label: "color mix" },
-      nodeBoost: { value: 0, min: 0, max: 10, step: 0.05, label: "brightness" },
-      nodeDriftBoost: { value: 0, min: 0, max: 20, step: 0.1, label: "drift boost" },
-      nodeSwirlStrength: { value: 0, min: 0, max: 2, step: 0.01, label: "swirl amp" },
-      nodeSwirlSpeed: { value: 0, min: 0, max: 10, step: 0.05, label: "swirl speed" },
-      nodeGravity: { value: 0, min: -1, max: 1, step: 0.01, label: "radial bias" },
-      nodeCenterGravity: { value: -0.22, min: -2, max: 2, step: 0.01, label: "center pull" },
-      nodeCoreStrength: { value: 0, min: 0, max: 20, step: 0.1, label: "core spike" },
+      nodeRadius: {
+        value: 0.13, min: 0.05, max: 3, step: 0.01, label: "radius",
+        onChange: (v: number) => { uniforms.uNodeRadius.value = v; },
+      },
+      nodeEmphRadius: {
+        value: 0.14, min: 0.05, max: 4, step: 0.01, label: "focus radius",
+        onChange: (v: number) => { uniforms.uNodeEmphRadius.value = v; },
+      },
+      nodeBulgeSize: {
+        value: 0, min: 0, max: 15, step: 0.1, label: "size boost",
+        onChange: (v: number) => { uniforms.uNodeBulgeSize.value = v; },
+      },
+      nodeColorMix: {
+        value: 0, min: 0, max: 1, step: 0.01, label: "color mix",
+        onChange: (v: number) => { uniforms.uNodeColorMix.value = v; },
+      },
+      nodeBoost: {
+        value: 0, min: 0, max: 10, step: 0.05, label: "brightness",
+        onChange: (v: number) => { uniforms.uNodeBoost.value = v; },
+      },
+      nodeDriftBoost: {
+        value: 0, min: 0, max: 20, step: 0.1, label: "drift boost",
+        onChange: (v: number) => { uniforms.uNodeDriftBoost.value = v; },
+      },
+      nodeSwirlStrength: {
+        value: 0, min: 0, max: 2, step: 0.01, label: "swirl amp",
+        onChange: (v: number) => { uniforms.uNodeSwirlStrength.value = v; },
+      },
+      nodeSwirlSpeed: {
+        value: 0, min: 0, max: 10, step: 0.05, label: "swirl speed",
+        onChange: (v: number) => { uniforms.uNodeSwirlSpeed.value = v; },
+      },
+      nodeGravity: {
+        value: 0, min: -1, max: 1, step: 0.01, label: "radial bias",
+        onChange: (v: number) => { uniforms.uNodeGravity.value = v; },
+      },
+      nodeCenterGravity: {
+        value: -0.22, min: -2, max: 2, step: 0.01, label: "center pull",
+        onChange: (v: number) => { uniforms.uNodeCenterGravity.value = v; },
+      },
+      nodeCoreStrength: {
+        value: 0, min: 0, max: 20, step: 0.1, label: "core spike",
+        onChange: (v: number) => { uniforms.uNodeCoreStrength.value = v; },
+      },
     }),
     Wind: folder({
       windX: { value: 0.6, min: -1, max: 1, step: 0.05, label: "x" },
       windY: { value: 0.1, min: -1, max: 1, step: 0.05, label: "y" },
       windZ: { value: 0, min: -1, max: 1, step: 0.05, label: "z" },
-      windStrength: { value: 0.04, min: 0, max: 1, step: 0.005, label: "strength" },
-      windSpeed: { value: 0.3, min: 0, max: 3, step: 0.05, label: "gust speed" },
+      windStrength: {
+        value: 0.04, min: 0, max: 1, step: 0.005, label: "strength",
+        onChange: (v: number) => { uniforms.uWindStrength.value = v; },
+      },
+      windSpeed: {
+        value: 0.3, min: 0, max: 3, step: 0.05, label: "gust speed",
+        onChange: (v: number) => { uniforms.uWindSpeed.value = v; },
+      },
     }),
     // Glints are the bright per-particle pinpricks. They take the particle's
     // own pigment (palette / stable / crisis / node tint) and the fragment
     // shader pushes it to full saturation so the hue reads at glint scale —
     // no shared tint here; the per-stream palette is what's seen.
     Glints: folder({
-      glintRatio: { value: 0.03, min: 0, max: 1, step: 0.01, label: "ratio" },
-      glintSizeMult: { value: 4, min: 1, max: 12, step: 0.1, label: "size mult" },
-      glintIntensity: { value: 1, min: 1, max: 30, step: 0.1, label: "intensity" },
+      glintRatio: {
+        value: 0.03, min: 0, max: 1, step: 0.01, label: "ratio",
+        onChange: (v: number) => { uniforms.uGlintRatio.value = v; },
+      },
+      glintSizeMult: {
+        value: 4, min: 1, max: 12, step: 0.1, label: "size mult",
+        onChange: (v: number) => { uniforms.uGlintSizeMult.value = v; },
+      },
+      glintIntensity: {
+        value: 1, min: 1, max: 30, step: 0.1, label: "intensity",
+        onChange: (v: number) => { uniforms.uGlintIntensity.value = v; },
+      },
     }),
     Grain: folder({
-      grainCore: { value: 80, min: 1, max: 80, step: 0.5, label: "core sharpness" },
-      grainHalo: { value: 8.7, min: 0.5, max: 10, step: 0.1, label: "halo sharpness" },
-      grainHaloAmp: { value: 0, min: 0, max: 1, step: 0.01, label: "halo amp" },
+      grainCore: {
+        value: 80, min: 1, max: 80, step: 0.5, label: "core sharpness",
+        onChange: (v: number) => { uniforms.uGrainCore.value = v; },
+      },
+      grainHalo: {
+        value: 8.7, min: 0.5, max: 10, step: 0.1, label: "halo sharpness",
+        onChange: (v: number) => { uniforms.uGrainHalo.value = v; },
+      },
+      grainHaloAmp: {
+        value: 0, min: 0, max: 1, step: 0.01, label: "halo amp",
+        onChange: (v: number) => { uniforms.uGrainHaloAmp.value = v; },
+      },
     }),
     // Woven multi-pigment palette: each stream is assigned one of A/B/C
     // (≈70/15/15 weighting in the vert shader) and the fragment shader
     // mixes that pigment over the stable/crisis tint by weaveAmount.
     // weaveAmount = 0 disables the effect entirely.
     Weave: folder({
-      weaveAmount: { value: 1.0, min: 0, max: 1, step: 0.01, label: "weave amount" },
+      weaveAmount: {
+        value: 1.0, min: 0, max: 1, step: 0.01, label: "weave amount",
+        onChange: (v: number) => { uniforms.uWeaveAmount.value = v; },
+      },
       // Smaller = bigger color zones (a whole branch tends to be one
       // pigment); larger = palette flips more often, approaching salt-and-
       // pepper at ~1.0. Stream-id axis is the dominant feel knob.
-      paletteZoneScale: { value: 0.42, min: 0.02, max: 1.0, step: 0.01, label: "zone scale" },
+      paletteZoneScale: {
+        value: 0.42, min: 0.02, max: 1.0, step: 0.01, label: "zone scale",
+        onChange: (v: number) => { uniforms.uPaletteZoneScale.value = v; },
+      },
       paletteA: { value: "#c0202a", label: "A (dominant)" },
       paletteB: { value: "#1a6db0", label: "B (accent)" },
       paletteC: { value: "#e0a020", label: "C (accent)" },
@@ -387,95 +587,6 @@ export function ParticleField({
     return geom;
   }, [timeline, particleCount, streamsPerEdge]);
 
-  // Build the uniforms object once per material lifetime — values are mutated
-  // in place when the leva controls change so the shader updates live without
-  // recompiling.
-  // Uniforms are created ONCE per mount and mutated in place. Rebuilding the
-  // object on timeline changes would reset uTime (visibly freezing animation)
-  // and force three.js to rebind every uniform — instead we keep the references
-  // stable and patch values via the effects below.
-  const uniforms = useMemo(
-    () => ({
-      uTime: { value: 0 },
-      uCurves: { value: null as THREE.DataTexture | null },
-      uEdgeFades: { value: null as THREE.DataTexture | null },
-      uEdgeFadeTexHeight: { value: 1 },
-      uCurveTexWidth: { value: 1 },
-      uCurveTexHeight: { value: 1 },
-      uPointSize: { value: 1 },
-      uTubeRadius: { value: 0 },
-      uWispAmp: { value: 0 },
-      uWispStretch: { value: 1 },
-      uWispMorphSpeed: { value: 0 },
-      uEdgeFlowSpread: { value: 1 },
-      uStreamPerturb: { value: 0 },
-      uGustAmp: { value: 0 },
-      uGustSpeed: { value: 0 },
-      uWispOctave: { value: 0 },
-      uPinHead: { value: 0 },
-      uPinTail: { value: 0 },
-      uTailBloom: { value: 0 },
-      uNodeVolume: { value: 0 },
-      uBunchFreq: { value: 0 },
-      uBunchContrast: { value: 0 },
-      uBunchTime: { value: 0 },
-      uBurstEnable: { value: 0 },
-      uBurstRate: { value: 60 },
-      uStreakAmp: { value: 0 },
-      uMinPointSize: { value: 1 },
-      uSpeedScale: { value: 1 },
-      uIntensity: { value: 0.1 },
-      uResolution: { value: new THREE.Vector2(1, 1) },
-      uStableColor: { value: new THREE.Color() },
-      uCrisisColor: { value: new THREE.Color() },
-      uShimmerSpikeFreq: { value: 0 },
-      uShimmerSpikeAmp: { value: 0 },
-      uShimmerSharpness: { value: 1 },
-      uShimmerSlowFreq: { value: 0 },
-      uShimmerSlowAmp: { value: 0 },
-      uShimmerDepth: { value: 0 },
-      // Bulge: data textures + count. Backing Float32Arrays are wrapped by
-      // DataTextures owned by the parent and mutated each frame; we point the
-      // sampler uniforms at the textures. Going through textures (rather than
-      // uniform arrays) avoids MAX_VERTEX_UNIFORM_VECTORS limits on the GPU,
-      // so we can scale to thousands of nodes.
-      uNodeCount: { value: 0 },
-      uNodePosFadeTex: { value: nodeBulge.posFade.texture },
-      uNodeColorEmphTex: { value: nodeBulge.colorEmph.texture },
-      uNodeTexHeight: { value: nodeBulge.texHeight },
-      uNodeRadius: { value: 0.45 },
-      uNodeEmphRadius: { value: 0.8 },
-      uNodeBulgeSize: { value: 0 },
-      uNodeColorMix: { value: 0 },
-      uNodeBoost: { value: 0 },
-      uNodeDriftBoost: { value: 0 },
-      uNodeSwirlStrength: { value: 0 },
-      uNodeSwirlSpeed: { value: 0 },
-      uNodeGravity: { value: 0 },
-      uNodeCenterGravity: { value: 0 },
-      uNodeCoreStrength: { value: 0 },
-      uWindDir: { value: new THREE.Vector3() },
-      uWindStrength: { value: 0 },
-      uWindSpeed: { value: 0 },
-      uGlintRatio: { value: 0 },
-      uGlintSizeMult: { value: 1 },
-      uGlintIntensity: { value: 1 },
-      uGrainCore: { value: 12 },
-      uGrainHalo: { value: 3 },
-      uGrainHaloAmp: { value: 0.1 },
-      uWeaveAmount: { value: 0 },
-      uPaletteZoneScale: { value: 0.1 },
-      uPaletteA: { value: new THREE.Color() },
-      uPaletteB: { value: new THREE.Color() },
-      uPaletteC: { value: new THREE.Color() },
-    }),
-    // The bulge arrays only change identity when Scene rebuilds them; otherwise
-    // we just mutate in place. We don't list nodeBulge here because creating
-    // new uniform objects on every render would re-bind every frame.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
-
   // Repoint the bulge texture uniforms whenever the textures themselves are
   // recreated (rare — only on hot-reload or component remount).
   useEffect(() => {
@@ -507,66 +618,16 @@ export function ParticleField({
     uniforms.uEdgeFadeTexHeight.value = edgeFadeTexture.image.height;
   }, [uniforms, edgeFadeTexture]);
 
-  // Live-update scalar/color uniforms in place. Mutating the stable uniforms
-  // object also reaches the material because it shares the reference. We
-  // intentionally don't list each leva value in the dep array — keeping a
-  // ~60-entry array in sync with the declarations above was a recurring bug
-  // surface. Running on every render is cheap (scalar writes; the uniforms
-  // object identity is stable).
+  // Mirror the few non-transient controls into uniforms. Everything else is
+  // wired up via transient onChange in the useControls factory above and
+  // bypasses React entirely. Kept depless to follow the prior convention;
+  // these are scalar/color writes and the destructure only changes when one
+  // of these controls actually moves, so this is cheap.
   useEffect(() => {
-    uniforms.uPointSize.value = pointSize;
-    uniforms.uTubeRadius.value = tubeRadius;
-    uniforms.uWispAmp.value = wispAmp;
-    uniforms.uWispStretch.value = wispStretch;
-    uniforms.uWispMorphSpeed.value = wispMorphSpeed;
-    uniforms.uEdgeFlowSpread.value = edgeFlowSpread;
-    uniforms.uStreamPerturb.value = streamPerturb;
-    uniforms.uGustAmp.value = gustAmp;
-    uniforms.uGustSpeed.value = gustSpeed;
-    uniforms.uWispOctave.value = wispOctave;
-    uniforms.uPinHead.value = pinHead;
-    uniforms.uPinTail.value = pinTail;
-    uniforms.uTailBloom.value = tailBloom;
-    uniforms.uNodeVolume.value = nodeVolume;
-    uniforms.uBunchFreq.value = bunchFreq;
-    uniforms.uBunchContrast.value = bunchContrast;
-    uniforms.uBunchTime.value = bunchTime;
     uniforms.uBurstEnable.value = burstEnable ? 1 : 0;
-    uniforms.uBurstRate.value = burstRate;
-    uniforms.uStreakAmp.value = streakAmp;
-    uniforms.uMinPointSize.value = minPointSize;
-    uniforms.uSpeedScale.value = speedScale;
-    uniforms.uIntensity.value = intensity;
-    uniforms.uShimmerSpikeFreq.value = shimmerSpikeFreq;
-    uniforms.uShimmerSpikeAmp.value = shimmerSpikeAmp;
-    uniforms.uShimmerSharpness.value = shimmerSharpness;
-    uniforms.uShimmerSlowFreq.value = shimmerSlowFreq;
-    uniforms.uShimmerSlowAmp.value = shimmerSlowAmp;
-    uniforms.uShimmerDepth.value = shimmerDepth;
     uniforms.uStableColor.value.set(stableColor);
     uniforms.uCrisisColor.value.set(crisisColor);
-    uniforms.uNodeRadius.value = nodeRadius;
-    uniforms.uNodeEmphRadius.value = nodeEmphRadius;
-    uniforms.uNodeBulgeSize.value = nodeBulgeSize;
-    uniforms.uNodeColorMix.value = nodeColorMix;
-    uniforms.uNodeBoost.value = nodeBoost;
-    uniforms.uNodeDriftBoost.value = nodeDriftBoost;
-    uniforms.uNodeSwirlStrength.value = nodeSwirlStrength;
-    uniforms.uNodeSwirlSpeed.value = nodeSwirlSpeed;
-    uniforms.uNodeGravity.value = nodeGravity;
-    uniforms.uNodeCenterGravity.value = nodeCenterGravity;
-    uniforms.uNodeCoreStrength.value = nodeCoreStrength;
     uniforms.uWindDir.value.set(windX, windY, windZ);
-    uniforms.uWindStrength.value = windStrength;
-    uniforms.uWindSpeed.value = windSpeed;
-    uniforms.uGlintRatio.value = glintRatio;
-    uniforms.uGlintSizeMult.value = glintSizeMult;
-    uniforms.uGlintIntensity.value = glintIntensity;
-    uniforms.uGrainCore.value = grainCore;
-    uniforms.uGrainHalo.value = grainHalo;
-    uniforms.uGrainHaloAmp.value = grainHaloAmp;
-    uniforms.uWeaveAmount.value = weaveAmount;
-    uniforms.uPaletteZoneScale.value = paletteZoneScale;
     uniforms.uPaletteA.value.set(paletteA);
     uniforms.uPaletteB.value.set(paletteB);
     uniforms.uPaletteC.value.set(paletteC);
