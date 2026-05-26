@@ -41,7 +41,6 @@ export function ParticleField({
 }: ParticleFieldProps) {
   const { size, camera } = useThree();
   const controls = useOrbitControls();
-  const materialRef = useRef<THREE.ShaderMaterial>(null!);
   // Reused each frame to avoid allocating in useFrame.
   const fallbackTarget = useMemo(() => new THREE.Vector3(), []);
 
@@ -682,7 +681,6 @@ export function ParticleField({
       raycast={noopRaycast}
     >
       <shaderMaterial
-        ref={materialRef}
         uniforms={uniforms}
         vertexShader={particlesVert}
         fragmentShader={particlesFrag}
