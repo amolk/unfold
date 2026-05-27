@@ -10,14 +10,26 @@ import type { NodeId, UnfoldData, Vec3 } from "../../types";
 // edges still render but won't influence position.
 
 export interface LayeredLayoutOptions {
-  /** World-space edge length between a parent and each child. Default 2.6. */
+  /** World-space mean edge length between a parent and each child. Default
+   *  2.85 (matches the prototype's 2.2..3.5 mean). Per-child variation is
+   *  added on top by `lengthJitter`. */
   edgeLength?: number;
-  /** Max half-angle (radians) of the yaw fan that spreads siblings around
-   *  the growth axis. Default ≈ π · 0.275 (≈49°), matching the prototype. */
+  /** Per-child world-space length variation, drawn deterministically from a
+   *  per-id hash so a child's length doesn't shift if siblings come and go.
+   *  Default 1.3 (matches the prototype's `rng()*1.3` range). 0 = constant. */
+  lengthJitter?: number;
+  /** Total angular SPAN (radians) of the yaw fan that spreads siblings
+   *  around the growth axis — the formula `((i - (n-1)/2) / (n-1)) * span`
+   *  produces values in [-span/2, +span/2], so default π·0.55 (≈99° total,
+   *  ±49° at the edges) matches the prototype exactly. */
   fanAngle?: number;
-  /** Max pitch jitter (radians) added per child from a per-id hash, so the
-   *  fan bends out of the yaw plane and the tree looks 3D-bushy rather than
-   *  flat-fan. Default ≈ 0.5 rad (≈29°). 0 = strictly planar fans. */
+  /** Per-child yaw jitter (radians) added on top of the even angular fan, so
+   *  siblings don't sit on perfectly symmetric rays. Default 0.25 (matches
+   *  the prototype's `(rng()-0.5)*0.25`). 0 = symmetric fan. */
+  yawJitter?: number;
+  /** Per-child pitch jitter (radians) bending the fan out of its yaw plane,
+   *  so the tree looks 3D-bushy rather than flat-fan. Default 0.5 (matches
+   *  the prototype). 0 = strictly planar fans. */
   pitchJitter?: number;
 }
 
@@ -50,23 +62,42 @@ function rotateAroundAxis(v: Vec3, k: Vec3, theta: number): Vec3 {
   ];
 }
 
-/** FNV-1a hash → uniform in [0, 1). Used for deterministic per-id pitch
- *  jitter so siblings don't all lie in the same yaw plane. */
-function hash01(s: string): number {
+/** FNV-1a hash of a string into a 32-bit uint, used as the seed for the
+ *  per-child PRNG below. */
+function hash32(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
-  return (h >>> 0) / 4294967296;
+  return h >>> 0;
+}
+
+/** mulberry32 — small deterministic PRNG returning values in [0, 1). One
+ *  instance per child id gives us three independent draws (yaw jitter,
+ *  pitch, length) without correlating them or shifting if siblings change.
+ *  Matches the per-parent rng in src/demo/demo-data.ts; combined with the
+ *  hash32 seed above, this is the exact same draw sequence the prototype's
+ *  procedural generator uses for an equivalent node id. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 export function layoutLayered(
   data: UnfoldData,
   opts: LayeredLayoutOptions = {},
 ): Map<NodeId, Vec3> {
-  const edgeLength = opts.edgeLength ?? 2.6;
-  const fanAngle = opts.fanAngle ?? Math.PI * 0.275;
+  const edgeLength = opts.edgeLength ?? 2.85;
+  const lengthJitter = opts.lengthJitter ?? 1.3;
+  const fanAngle = opts.fanAngle ?? Math.PI * 0.55;
+  const yawJitter = opts.yawJitter ?? 0.25;
   const pitchJitter = opts.pitchJitter ?? 0.5;
 
   const ids = data.nodes.map((n) => n.id);
@@ -174,19 +205,35 @@ export function layoutLayered(
     const n = cs.length;
     for (let i = 0; i < n; i++) {
       const cId = cs[i];
-      // Yaw: even angular fan around `up`, centered on `incoming`. For a
-      // 1-child node we straight-shoot the incoming direction (no yaw).
-      const yaw = n === 1 ? 0 : ((i - (n - 1) / 2) / (n - 1)) * fanAngle;
-      // Pitch: deterministic per-id jitter (centered around 0). Bends the
-      // fan out of its yaw plane so the tree looks 3D-bushy.
-      const pitch = pitchJitter > 0 ? (hash01(cId) - 0.5) * pitchJitter : 0;
+      // Three independent draws from a per-child PRNG so yaw jitter, pitch,
+      // and length variation are uncorrelated — and stay stable if siblings
+      // are added or removed (each child's seed is its own id). Draws are
+      // always taken (even when their multiplier is 0) so toggling one
+      // jitter off doesn't shift the others' values.
+      const rng = mulberry32(hash32(cId));
+      const rYaw = rng();
+      const rPitch = rng();
+      const rLen = rng();
+      const yawJit = (rYaw - 0.5) * yawJitter;
+      const pitch = (rPitch - 0.5) * pitchJitter;
+      const lenVar = rLen * lengthJitter;
+      // Yaw: even angular fan around `up`, centered on `incoming`, plus the
+      // per-child jitter. For a 1-child node we straight-shoot incoming
+      // (no fan, but jitter still applies so a chain of single children
+      // doesn't run perfectly straight).
+      const yawFan = n === 1 ? 0 : ((i - (n - 1) / 2) / (n - 1)) * fanAngle;
+      const yaw = yawFan + yawJit;
 
       const dir = rotateAroundAxis(
         rotateAroundAxis(incoming, up, yaw),
         side,
         pitch,
       );
-      const cPos = add(uPos, scale(dir, edgeLength));
+      // Length = mean - half-jitter + drawn variation, so a 0 draw lands at
+      // the low end (matching the prototype's `2.2 + rng()*1.3`) and a 1.0
+      // draw lands at the high end.
+      const length = edgeLength - lengthJitter * 0.5 + lenVar;
+      const cPos = add(uPos, scale(dir, length));
       pos.set(cId, cPos);
       // Incoming for the child = its own (parent → child) direction. Use the
       // ACTUAL world displacement (not `dir`) so floating-point drift can't
