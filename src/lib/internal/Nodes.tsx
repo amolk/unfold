@@ -61,6 +61,12 @@ export function Nodes({
   }, [timeline, stableColor, crisisColor]);
 
   // Apply instance matrices + (re)bind the static per-instance attributes.
+  // `nodeRadius` is in the deps because changing it makes R3F rebuild the
+  // <sphereGeometry>; the new BufferGeometry replaces mesh.geometry and any
+  // previously-bound aInstance* attributes vanish with the old one. Without
+  // re-binding, the vertex shader reads default 0 for aInstanceFade and the
+  // sphere collapses to a point. Same reason `nodeRadius` is in the deps of
+  // the fade-bind and scale-bind effects below.
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
@@ -86,19 +92,21 @@ export function Nodes({
       "aInstanceKind",
       new THREE.InstancedBufferAttribute(instKinds, 1),
     );
-  }, [timeline, positions, instColors, instKinds]);
+  }, [timeline, positions, instColors, instKinds, nodeRadius]);
 
   // (Re)bind the externally-owned fade attribute. Backing array is mutated by
-  // the parent each frame; we don't recreate it here.
+  // the parent each frame; we don't recreate it here. `nodeRadius` is in the
+  // deps so we re-bind after a geometry rebuild — see the comment above.
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
     const geom = mesh.geometry as THREE.InstancedBufferGeometry;
     geom.setAttribute("aInstanceFade", fadeAttribute);
-  }, [fadeAttribute]);
+  }, [fadeAttribute, nodeRadius]);
 
   // All nodes render at the same size; the focused node "lights up" instead
   // (the fragment shader boosts body brightness and rim strength by vEmphasis).
+  // `nodeRadius` is in the deps so we re-bind after a geometry rebuild.
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
@@ -115,7 +123,7 @@ export function Nodes({
       "aInstanceEmphasis",
       new THREE.InstancedBufferAttribute(emphases, 1),
     );
-  }, [timeline, focusedIndex]);
+  }, [timeline, focusedIndex, nodeRadius]);
 
   const uniforms = useMemo(
     () => ({

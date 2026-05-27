@@ -68,11 +68,18 @@ export function Scene({ data, theme, style, layout }: SceneProps) {
   // GPU mirrors that stay bound across frames.
   const [activeKey, setActiveKey] = useState(0);
 
-  // Sync the projection's active set against the normalized scene. The
-  // projection prunes finished-fade entries here too — see SceneProjection.sync.
+  // Sync the projection's active set against the normalized scene, then bump
+  // activeKey so `built` rebuilds. We bump on every normalized-identity change
+  // (not only when sync reports topology change) because data-only updates —
+  // new bezier `controls` after a layout toggle, new edge `colors` after a
+  // flow-preset change, repositioned nodes — must propagate through build() to
+  // the Timeline (and from there to ParticleField's curve / edge-color
+  // textures + geometry). The cost is a rebuild on each `data` prop swap; on a
+  // demo-sized tree that's microseconds. The projection prunes finished-fade
+  // entries inside sync() — see SceneProjection.sync.
   useEffect(() => {
-    const changed = projection.sync(normalized);
-    if (changed) setActiveKey((k) => k + 1);
+    projection.sync(normalized);
+    setActiveKey((k) => k + 1);
   }, [normalized, projection]);
 
   const built = useMemo(
