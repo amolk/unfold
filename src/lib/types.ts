@@ -86,6 +86,9 @@ export interface UnfoldStyle {
     streams?: number;
     /** Sideways wisp displacement amplitude. Default 0.15. */
     wispAmplitude?: number;
+    /** How fast wisp paths evolve over time. 0 = frozen pattern; default 0.15
+     *  gives a slow, lava-lamp-like drift. */
+    wispMorphSpeed?: number;
     /** Wisp stretch along the curve tangent. Default 0.7. */
     wispStretch?: number;
     /** Per-thread noise detail in [0,1]. Default 0.96. */

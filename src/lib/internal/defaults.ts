@@ -31,6 +31,10 @@ export const DEFAULT_EDGE = {
   density: 4_000,
   streams: 30,
   wispAmplitude: 0.15,
+  // Default to a slow, lava-lamp-like drift so the wisps visibly evolve over
+  // time. 0 = frozen pattern (the original Leva default; needed the slider
+  // dragged before paths moved).
+  wispMorphSpeed: 0.15,
   wispStretch: 0.7,
   threadDetail: 0.96,
   streakLength: 0.6,
@@ -72,6 +76,7 @@ export interface ResolvedStyle {
     density: number;
     streams: number;
     wispAmplitude: number;
+    wispMorphSpeed: number;
     wispStretch: number;
     threadDetail: number;
     streakLength: number;
@@ -112,6 +117,7 @@ export function resolveStyle(style?: UnfoldStyle): ResolvedStyle {
       density: edge?.density ?? DEFAULT_EDGE.density,
       streams: edge?.streams ?? DEFAULT_EDGE.streams,
       wispAmplitude: edge?.wispAmplitude ?? DEFAULT_EDGE.wispAmplitude,
+      wispMorphSpeed: edge?.wispMorphSpeed ?? DEFAULT_EDGE.wispMorphSpeed,
       wispStretch: edge?.wispStretch ?? DEFAULT_EDGE.wispStretch,
       threadDetail: edge?.threadDetail ?? DEFAULT_EDGE.threadDetail,
       streakLength: edge?.streakLength ?? DEFAULT_EDGE.streakLength,

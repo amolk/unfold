@@ -40,6 +40,7 @@ interface ParticleFieldProps {
   // --- style.edge.* tunables (Phase 3). Each maps to a single uniform; the
   // effect below pushes them live. Defaults match the baked uniform values. ---
   wispAmplitude?: number;
+  wispMorphSpeed?: number;
   wispStretch?: number;
   threadDetail?: number;
   streakLength?: number;
@@ -59,6 +60,7 @@ export function ParticleField({
   streamsPerEdge = DEFAULT_STREAMS_PER_EDGE,
   samplesPerCurve = DEFAULT_SAMPLES_PER_CURVE,
   wispAmplitude = 0.15,
+  wispMorphSpeed = 0.15,
   wispStretch = 0.7,
   threadDetail = 0.96,
   streakLength = 0.6,
@@ -117,7 +119,7 @@ export function ParticleField({
       uTubeRadius: { value: 0 },
       uWispAmp: { value: 0.15 },
       uWispStretch: { value: 0.7 },
-      uWispMorphSpeed: { value: 0 },
+      uWispMorphSpeed: { value: 0.15 },
       uEdgeFlowSpread: { value: 0 },
       uStreamPerturb: { value: 0.96 },
       uGustAmp: { value: 0 },
@@ -399,6 +401,7 @@ export function ParticleField({
   // see the `style.edge` JSDoc in types.ts for why they aren't exposed.
   useEffect(() => {
     uniforms.uWispAmp.value = wispAmplitude;
+    uniforms.uWispMorphSpeed.value = wispMorphSpeed;
     uniforms.uWispStretch.value = wispStretch;
     uniforms.uStreamPerturb.value = threadDetail;
     uniforms.uStreakAmp.value = streakLength;
@@ -409,6 +412,7 @@ export function ParticleField({
   }, [
     uniforms,
     wispAmplitude,
+    wispMorphSpeed,
     wispStretch,
     threadDetail,
     streakLength,

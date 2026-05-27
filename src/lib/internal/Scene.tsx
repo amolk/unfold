@@ -107,6 +107,7 @@ export function Scene({ data, theme, style, layout }: SceneProps) {
         particlesPerEdge={style.edge.density}
         streamsPerEdge={style.edge.streams}
         wispAmplitude={style.edge.wispAmplitude}
+        wispMorphSpeed={style.edge.wispMorphSpeed}
         wispStretch={style.edge.wispStretch}
         threadDetail={style.edge.threadDetail}
         streakLength={style.edge.streakLength}
