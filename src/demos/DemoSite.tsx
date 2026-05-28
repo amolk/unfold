@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { DemoPage } from "./DemoPage";
+import { Landing } from "./Landing";
 import { demos, findDemo } from "./registry";
 
 function readSlug(): string {
-  const hash = window.location.hash.replace(/^#\/?/, "");
-  return hash || demos[0].slug;
+  return window.location.hash.replace(/^#\/?/, "");
 }
 
 export function DemoSite() {
@@ -16,7 +16,10 @@ export function DemoSite() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const demo = findDemo(slug) ?? demos[0];
+  // Empty hash → Landing. Unknown slug also falls back to Landing rather than
+  // silently rerouting, so a bad URL is obvious.
+  const demo = slug ? findDemo(slug) : undefined;
+  const showLanding = !slug || !demo;
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
@@ -29,46 +32,74 @@ export function DemoSite() {
           padding: "24px 0",
         }}
       >
-        <div
+        <a
+          href="#/"
           style={{
+            display: "block",
             padding: "0 20px 20px",
             color: "#d8d0c8",
             fontSize: 13,
             fontWeight: 600,
             letterSpacing: "0.08em",
             textTransform: "uppercase",
+            textDecoration: "none",
           }}
         >
           Unfold · demos
-        </div>
+        </a>
         <nav>
-          {demos.map((d) => {
-            const active = d.slug === demo.slug;
-            return (
-              <a
-                key={d.slug}
-                href={`#/${d.slug}`}
-                style={{
-                  display: "block",
-                  padding: "8px 20px",
-                  color: active ? "#ffd8a0" : "#a89890",
-                  background: active ? "rgba(255, 176, 96, 0.08)" : "transparent",
-                  borderLeft: active
-                    ? "2px solid #ffb060"
-                    : "2px solid transparent",
-                  textDecoration: "none",
-                  fontSize: 13,
-                }}
-              >
-                {d.title}
-              </a>
-            );
-          })}
+          <SidebarLink href="#/" label="About" active={showLanding} />
+          <div
+            style={{
+              padding: "16px 20px 6px",
+              color: "#6a5a52",
+              fontSize: 10,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+            }}
+          >
+            Demos
+          </div>
+          {demos.map((d) => (
+            <SidebarLink
+              key={d.slug}
+              href={`#/${d.slug}`}
+              label={d.title}
+              active={!showLanding && d.slug === demo?.slug}
+            />
+          ))}
         </nav>
       </aside>
       <main style={{ flex: 1, minWidth: 0 }}>
-        <DemoPage demo={demo} />
+        {showLanding ? <Landing /> : <DemoPage demo={demo!} />}
       </main>
     </div>
+  );
+}
+
+function SidebarLink({
+  href,
+  label,
+  active,
+}: {
+  href: string;
+  label: string;
+  active: boolean;
+}) {
+  return (
+    <a
+      href={href}
+      style={{
+        display: "block",
+        padding: "8px 20px",
+        color: active ? "#ffd8a0" : "#a89890",
+        background: active ? "rgba(255, 176, 96, 0.08)" : "transparent",
+        borderLeft: active ? "2px solid #ffb060" : "2px solid transparent",
+        textDecoration: "none",
+        fontSize: 13,
+      }}
+    >
+      {label}
+    </a>
   );
 }
