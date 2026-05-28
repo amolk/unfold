@@ -27,11 +27,10 @@ function BloomFx() {
  *
  *  Wired so far: `data` (Phase 2), `theme` + `style` (Phase 3), `layout`
  *  (Phase 4), `onNode*` / `onEdge*` / `onBackgroundClick` (Phase 6),
- *  `focusedNodeId` / `selectedNodeIds` / `expandedNodeIds` (Phase 7).
- *  Every other prop on `UnfoldProps` is accepted for forward-compatible
- *  type-checking but is a no-op until the phase that lands its behavior:
- *    - `onNodeExpand` (+ expand affordance,
- *      animated data diff)        → Phase 8
+ *  `focusedNodeId` / `selectedNodeIds` / `expandedNodeIds` (Phase 7),
+ *  `onNodeExpand` + expand affordance + animated fade-in on data-diff
+ *  (Phase 8). Every other prop on `UnfoldProps` is accepted for
+ *  forward-compatible type-checking but is a no-op until:
  *    - `cameraMode`, `initialCamera` → Phase 9
  *    - `ref` (UnfoldHandle)       → Phase 10
  *  Setting any of those today is silently ignored.
@@ -57,6 +56,7 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
     onEdgeClick,
     onEdgeHover,
     onBackgroundClick,
+    onNodeExpand,
     onFocusChange,
     onSelectionChange,
   },
@@ -126,6 +126,7 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
         onNodeHover={onNodeHover}
         onEdgeClick={onEdgeClick}
         onEdgeHover={onEdgeHover}
+        onNodeExpand={onNodeExpand}
       />
       <BloomFx />
     </Canvas>

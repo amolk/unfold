@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { ParticleField } from "./ParticleField";
 import { Nodes } from "./Nodes";
 import { EdgePicker } from "./picking/edge-picker";
+import { Affordance } from "./picking/affordance";
 import { SceneProjection, normalizeData } from "./scene-projection";
 import type { ResolvedStyle, ResolvedTheme } from "./defaults";
 import type {
@@ -55,6 +56,10 @@ interface SceneProps {
   onNodeHover?: (node: UnfoldNode | null, event: PointerEvent) => void;
   onEdgeClick?: (edge: UnfoldEdge, event: PointerEvent) => void;
   onEdgeHover?: (edge: UnfoldEdge | null, event: PointerEvent) => void;
+  /** Phase 8: fires when the user clicks the expand-affordance ring around
+   *  a node whose `expandable === true` and id is NOT in expandedNodeIds.
+   *  Caller is expected to fetch + append children to `data`. */
+  onNodeExpand?: (node: UnfoldNode) => void;
 }
 
 export function Scene({
@@ -64,13 +69,14 @@ export function Scene({
   layout,
   focusedNodeId,
   selectedNodeIds,
-  expandedNodeIds: _expandedNodeIds, // Phase-8 consumer
+  expandedNodeIds,
   onSetFocus,
   onSetSelected: _onSetSelected, // reserved for caller-driven selection in Phase 8+
   onNodeClick,
   onNodeHover,
   onEdgeClick,
   onEdgeHover,
+  onNodeExpand,
 }: SceneProps) {
   const stableColor = theme.stableColor;
   const crisisColor = theme.crisisColor;
@@ -150,6 +156,43 @@ export function Scene({
     const sel = new Set(selectedNodeIds);
     return built.nodeIds.map((id) => sel.has(id));
   }, [built, selectedNodeIds]);
+
+  // Phase 8: compute the list of nodes that should display the
+  // expand-affordance ring — `expandable === true` AND not in
+  // expandedNodeIds. Each entry carries the position (Vec3 tuple) for the
+  // Affordance to render at, and the timeline-index for onAffordanceClick →
+  // onNodeExpand round-tripping.
+  const affordances = useMemo(() => {
+    if (!onNodeExpand) return [];
+    const expanded = new Set(expandedNodeIds);
+    const out: { index: number; position: [number, number, number] }[] = [];
+    for (let i = 0; i < built.nodeIds.length; i++) {
+      const id = built.nodeIds[i];
+      const node = nodeById.get(id);
+      if (!node?.expandable) continue;
+      if (expanded.has(id)) continue;
+      const p = built.timeline.nodes[i].position;
+      out.push({ index: i, position: [p.x, p.y, p.z] });
+    }
+    return out;
+  }, [built, nodeById, expandedNodeIds, onNodeExpand]);
+
+  const affordancePositions = useMemo(
+    () => affordances.map((a) => a.position),
+    [affordances],
+  );
+
+  const wiredAffordanceClick = useCallback(
+    (idx: number, _event: PointerEvent) => {
+      if (!onNodeExpand) return;
+      const a = affordances[idx];
+      if (!a) return;
+      const id = built.nodeIds[a.index];
+      const node = id != null ? nodeById.get(id) : undefined;
+      if (node) onNodeExpand(node);
+    },
+    [affordances, built, nodeById, onNodeExpand],
+  );
 
   // Free every GPU resource the projection owns when Scene unmounts.
   useEffect(() => () => projection.dispose(), [projection]);
@@ -258,6 +301,20 @@ export function Scene({
         onEdgeClick={onEdgeClick ? wiredEdgeClick : undefined}
         onEdgeHover={onEdgeHover ? wiredEdgeHover : undefined}
       />
+      {/* Phase 8: expand-affordance ring around any expandable+unexpanded
+          node. Rendered only when onNodeExpand is wired (no point showing
+          an affordance the caller won't act on). Ring radii are derived
+          from the node sphere radius so the ring sits just outside the
+          sphere. */}
+      {onNodeExpand && (
+        <Affordance
+          positions={affordancePositions}
+          color={theme.highlight}
+          innerRadius={style.node.baseRadius * 1.4}
+          outerRadius={style.node.baseRadius * 1.7}
+          onAffordanceClick={wiredAffordanceClick}
+        />
+      )}
       <OrbitControls
         enablePan
         enableRotate

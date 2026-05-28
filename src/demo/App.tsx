@@ -2,6 +2,15 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useControls } from "leva";
 import { Unfold, type NodeId, type UnfoldEdge, type UnfoldNode } from "../lib";
 import { applyFlowPreset, buildDemoData, type FlowPreset } from "./demo-data";
+import {
+  createExplorer,
+  expandedIds as explorerExpandedIds,
+  expandNode,
+  toggleExpanded,
+  toUnfoldData,
+  withFocus,
+  type ExplorerMode,
+} from "./explorer-state";
 import { useUnfoldStyleControls, useUnfoldThemeControls } from "./leva-panels";
 
 /** Catches render errors from the R3F tree and shows the stack inline, instead
@@ -44,36 +53,83 @@ class Boundary extends React.Component<
 }
 
 export function App() {
-  // "auto layout" off → caller supplies the prototype's hand-placed 3D
-  // positions; on → caller omits positions/controls and the library lays the
-  // tree out with its layered algorithm. "edge flow" picks an EdgeFlow preset.
-  // "controlled mode" toggles whether the demo passes focusedNodeId /
-  // selectedNodeIds props (controlled — demo owns state) or omits them
-  // (uncontrolled — library owns the state internally).
-  const { autoLayout, flowPreset, controlled, multiSelect } = useControls("Demo", {
-    autoLayout: false,
-    flowPreset: {
-      // Default to the two-color stable+crisis mix so the demo opens on the
-      // prototype's recognizable look; "single" is a single-color stream.
-      value: "two",
-      options: ["single", "two", "three", "eight"],
-      label: "edge flow",
-    },
-    controlled: { value: true, label: "controlled mode" },
-    multiSelect: { value: false, label: "multi-select" },
-  });
+  // "explorer" picks the demo's data source:
+  //   - "off"          → static buildDemoData full tree (the original tracer
+  //                      bullet; respects autoLayout for omit-positions).
+  //   - "single-path"  → root → focus chain + focus's children; click moves
+  //                      focus. Children generated lazily.
+  //   - "toggle"       → click a node to toggle its branch open/closed.
+  //                      Affordance ring shows on closed branches.
+  //   - "full-tree"    → entire pre-generated tree (no affordance needed).
+  // "auto layout" only applies in "off" mode (it would conflict with the
+  // explorer's hand-built positions).
+  const { explorer, autoLayout, flowPreset, controlled, multiSelect } =
+    useControls("Demo", {
+      explorer: {
+        value: "off" as "off" | ExplorerMode,
+        options: ["off", "single-path", "toggle", "full-tree"],
+        label: "explorer",
+      },
+      autoLayout: { value: false, label: "auto layout" },
+      flowPreset: {
+        // Default to the two-color stable+crisis mix so the demo opens on the
+        // prototype's recognizable look; "single" is a single-color stream.
+        value: "two",
+        options: ["single", "two", "three", "eight"],
+        label: "edge flow",
+      },
+      controlled: { value: true, label: "controlled mode" },
+      multiSelect: { value: false, label: "multi-select" },
+    });
   const theme = useUnfoldThemeControls();
   const style = useUnfoldStyleControls();
 
-  const baseData = useMemo(
+  // --- Static path (explorer === "off") ---------------------------------
+  // Existing tracer-bullet behavior: buildDemoData yields a full static
+  // tree; autoLayout toggles whether positions are baked in.
+  const staticData = useMemo(
     () => buildDemoData(9143, 4, { positioned: !autoLayout }),
     [autoLayout],
   );
+
+  // --- Explorer path ----------------------------------------------------
+  // Single explorer state slot, re-created when the user changes mode (so
+  // toggling between single-path and toggle doesn't carry over previously-
+  // expanded branches that don't make sense in the new mode).
+  const [explorerState, setExplorerState] = useState(() =>
+    createExplorer({ mode: "single-path" }),
+  );
+  useEffect(() => {
+    if (explorer === "off") return;
+    setExplorerState(createExplorer({ mode: explorer as ExplorerMode }));
+  }, [explorer]);
+
+  // Project the explorer state into UnfoldData. Re-runs when state changes
+  // (via the dispatch helpers below) or when the demo's flow preset flips.
+  const explorerData = useMemo(() => {
+    return toUnfoldData(explorerState, {
+      markExpandable: explorerState.mode !== "full-tree",
+    });
+  }, [explorerState]);
+
+  // Which dataset to feed the library this render. Just a switch — neither
+  // path mutates the other.
+  const baseData = explorer === "off" ? staticData : explorerData;
+
   const stable = theme.categories?.stable ?? "#8CD0FF";
   const crisis = theme.categories?.crisis ?? "#FFB060";
   const data = useMemo(
     () => applyFlowPreset(baseData, flowPreset as FlowPreset, [stable, crisis]),
     [baseData, flowPreset, stable, crisis],
+  );
+
+  // expandedNodeIds for the library: in explorer mode we mirror the
+  // state machine's view (so the affordance hides nodes whose subtree is
+  // already on screen). In "off" mode there's no expansion concept — pass
+  // an empty array.
+  const expandedIds = useMemo(
+    () => (explorer === "off" ? [] : explorerExpandedIds(explorerState)),
+    [explorer, explorerState],
   );
 
   // Last hovered / clicked targets, for the side panel below. Hover state is
@@ -116,12 +172,31 @@ export function App() {
     );
   };
 
+  // Click dispatcher for the explorer modes. Routes node clicks to the
+  // appropriate state transition; in "off" mode this is a no-op.
+  const handleNodeClickForExplorer = (node: UnfoldNode) => {
+    if (explorer === "off") return;
+    if (explorerState.mode === "single-path") {
+      setExplorerState((s) => withFocus(s, node.id));
+    } else if (explorerState.mode === "toggle") {
+      setExplorerState((s) => toggleExpanded(s, node.id));
+    } else {
+      // full-tree: click only moves focus for the camera.
+      setExplorerState((s) => withFocus(s, node.id));
+    }
+  };
+  const handleNodeExpandForExplorer = (node: UnfoldNode) => {
+    if (explorer === "off") return;
+    setExplorerState((s) => expandNode(s, node.id));
+  };
+
   return (
     <Boundary>
       <Unfold
         data={data}
         theme={theme}
         style={style}
+        expandedNodeIds={expandedIds}
         focusedNodeId={controlled ? focused : undefined}
         selectedNodeIds={controlled ? selected : undefined}
         onFocusChange={(id) => {
@@ -139,12 +214,14 @@ export function App() {
         onNodeClick={(node) => {
           setClicked({ kind: "node", item: node });
           toggleSelection(node.id);
+          handleNodeClickForExplorer(node);
         }}
         onEdgeClick={(edge) => setClicked({ kind: "edge", item: edge })}
         onBackgroundClick={() => {
           setClicked(null);
           setSelected([]);
         }}
+        onNodeExpand={handleNodeExpandForExplorer}
       />
       <SidePanel
         hovered={hovered}
@@ -152,6 +229,7 @@ export function App() {
         focused={focused}
         selected={selected}
         controlled={controlled}
+        mode={explorer === "off" ? null : (explorerState.mode as ExplorerMode)}
       />
     </Boundary>
   );
@@ -171,12 +249,14 @@ function SidePanel({
   focused,
   selected,
   controlled,
+  mode,
 }: {
   hovered: HoverTarget;
   clicked: HoverTarget;
   focused: NodeId | null;
   selected: NodeId[];
   controlled: boolean;
+  mode: ExplorerMode | null;
 }) {
   return (
     <div
@@ -198,7 +278,7 @@ function SidePanel({
       }}
     >
       <div style={{ color: "#a89890", marginBottom: 6 }}>
-        mode: {controlled ? "controlled" : "uncontrolled"}
+        explorer: {mode ?? "off"} · {controlled ? "controlled" : "uncontrolled"}
       </div>
       <Row label="hover" target={hovered} />
       <div style={{ height: 6 }} />

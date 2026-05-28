@@ -290,11 +290,12 @@ export class SceneProjection {
         existing.target = 1;
         existing.node = n;
       } else {
-        // Spheres pop in at full size — initial fade = 1 so the vertex
-        // shader's `position * aInstanceScale * aInstanceFade` lands at full
-        // radius on the first frame. Departure still works (target=0 ramps
-        // fade 1→0 and the sphere shrinks out).
-        this.nodes.set(n.id, { node: n, target: 1, fade: 1, index: -1 });
+        // Phase 8: spheres fade IN from 0 → 1 over the fadeSpeed window so
+        // newly-appended children (after onNodeExpand) bloom into view
+        // instead of popping. Departures already worked (target=0 ramps
+        // fade 1→0); the symmetric enter case here closes the loop and
+        // makes data-diff animation look the same for adds and removes.
+        this.nodes.set(n.id, { node: n, target: 1, fade: 0, index: -1 });
         topologyChanged = true;
       }
     }
