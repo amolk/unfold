@@ -9,6 +9,11 @@ import { DEFAULT_SCENE } from "./defaults";
 interface NodesProps {
   timeline: Timeline;
   focusedIndex?: number;
+  /** Boolean flags parallel to `timeline.nodes`. `selectedFlags[i] === true`
+   *  draws the i-th node with the highlight-rim treatment. Pass the same
+   *  empty / all-false array if no nodes are selected (don't toggle between
+   *  passing/undefined to avoid effect churn). */
+  selectedFlags?: boolean[];
   /** Per-instance fade in [0,1]; backing array is mutated by the owner each
    *  frame, we just (re)bind it and set needsUpdate. */
   fadeAttribute: THREE.InstancedBufferAttribute;
@@ -17,6 +22,8 @@ interface NodesProps {
   /** From the shared theme — see defaults.ts / theme prop. */
   stableColor: string;
   crisisColor: string;
+  /** Hex color used as the rim tint for selected nodes. */
+  highlightColor: string;
   /** Sphere radius. Formerly the "Nodes" Leva panel. */
   nodeRadius?: number;
   /** Rim-light strength. Formerly the "Nodes" Leva panel. */
@@ -31,10 +38,12 @@ interface NodesProps {
 export function Nodes({
   timeline,
   focusedIndex = -1,
+  selectedFlags,
   fadeAttribute,
   sphereOpacity,
   stableColor,
   crisisColor,
+  highlightColor,
   nodeRadius = DEFAULT_SCENE.nodeRadius,
   rimStrength = DEFAULT_SCENE.rimStrength,
   onNodeClick,
@@ -118,9 +127,11 @@ export function Nodes({
     const n = timeline.nodes.length;
     const scales = new Float32Array(n);
     const emphases = new Float32Array(n);
+    const selected = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       scales[i] = 1;
       emphases[i] = i === focusedIndex ? 1 : 0;
+      selected[i] = selectedFlags?.[i] ? 1 : 0;
     }
     const geom = mesh.geometry as THREE.InstancedBufferGeometry;
     geom.setAttribute("aInstanceScale", new THREE.InstancedBufferAttribute(scales, 1));
@@ -128,13 +139,18 @@ export function Nodes({
       "aInstanceEmphasis",
       new THREE.InstancedBufferAttribute(emphases, 1),
     );
-  }, [timeline, focusedIndex, nodeRadius]);
+    geom.setAttribute(
+      "aInstanceSelected",
+      new THREE.InstancedBufferAttribute(selected, 1),
+    );
+  }, [timeline, focusedIndex, selectedFlags, nodeRadius]);
 
   const uniforms = useMemo(
     () => ({
       uRimStrength: { value: rimStrength },
       uDarkTint: { value: new THREE.Color(0.25, 0.18, 0.15) },
       uOpacity: { value: 1 },
+      uHighlightColor: { value: new THREE.Color(highlightColor) },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -145,7 +161,8 @@ export function Nodes({
     if (!u) return;
     u.uRimStrength.value = rimStrength;
     u.uOpacity.value = sphereOpacity;
-  }, [rimStrength, sphereOpacity]);
+    u.uHighlightColor.value.set(highlightColor);
+  }, [rimStrength, sphereOpacity, highlightColor]);
 
   // The most-recently-entered instance index, used to suppress stale
   // pointerOut events from an instance the cursor already moved off of.

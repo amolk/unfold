@@ -64,7 +64,13 @@ export interface ResolvedTheme {
   crisisColor: string;
   /** Stream color for edges that carry no `flow` spec (Phase 5). */
   defaultEdgeColor: string;
+  /** Rim tint used for nodes whose id appears in `selectedNodeIds`. */
+  highlight: string;
 }
+
+/** Default highlight color — a pale warm white that reads on both the cool
+ *  stable and warm crisis defaults. */
+const DEFAULT_HIGHLIGHT = "#ffffff";
 
 export interface ResolvedStyle {
   node: {
@@ -101,6 +107,7 @@ export function resolveTheme(theme?: UnfoldTheme): ResolvedTheme {
       categories?.stable ??
       theme?.defaultNodeColor ??
       DEFAULT_THEME.stableColor,
+    highlight: theme?.highlight ?? DEFAULT_HIGHLIGHT,
   };
 }
 

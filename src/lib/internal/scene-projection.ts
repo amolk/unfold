@@ -377,7 +377,11 @@ export class SceneProjection {
 
     const nodeIds = nodeEntries.map((e) => e.node.id);
     const edgeIds = edgeEntries.map((e) => e.edge.id);
-    const focusIndex = nodeIndex.get(focusId) ?? 0;
+    // -1 (not 0) when `focusId` is empty/unknown so the Nodes shader's
+    // `aInstanceEmphasis[i === focusedIndex ? 1 : 0]` test fails for every
+    // node — i.e. no node is emphasized when focus is `null`. The previous
+    // `?? 0` accidentally highlighted node 0 in that case.
+    const focusIndex = nodeIndex.get(focusId) ?? -1;
 
     return {
       timeline: { nodes: tlNodes, edges: tlEdges },

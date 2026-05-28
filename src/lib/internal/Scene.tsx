@@ -8,6 +8,7 @@ import { EdgePicker } from "./picking/edge-picker";
 import { SceneProjection, normalizeData } from "./scene-projection";
 import type { ResolvedStyle, ResolvedTheme } from "./defaults";
 import type {
+  NodeId,
   UnfoldData,
   UnfoldEdge,
   UnfoldLayout,
@@ -33,6 +34,19 @@ interface SceneProps {
   style: ResolvedStyle;
   /** Layout strategy; "none" disables auto-layout for nodes missing position. */
   layout: UnfoldLayout;
+  // --- Phase 7: resolved per-field state from Unfold's useControllableState. ---
+  /** Currently focused node (camera target / bulge tint). `null` = no focus. */
+  focusedNodeId: NodeId | null;
+  /** Set of selected node ids — rendered with the highlight rim. */
+  selectedNodeIds: readonly NodeId[];
+  /** Set of expanded node ids — Phase 8 reads this for affordance rendering. */
+  expandedNodeIds: readonly NodeId[];
+  /** Dual-mode setter for focus. In controlled mode the parent fires
+   *  onFocusChange via the same setter; in uncontrolled mode it also
+   *  updates the parent's internal state. Scene calls this from node click. */
+  onSetFocus: (next: NodeId | null) => void;
+  /** Same shape, for selection. */
+  onSetSelected: (next: readonly NodeId[]) => void;
   // --- Phase 6: pick events. Item-first arg order in the public callbacks
   // (the public UnfoldNode/Edge object first, then the PointerEvent). Scene
   // owns the index→public-object lookup so the picker components can stay
@@ -48,6 +62,11 @@ export function Scene({
   theme,
   style,
   layout,
+  focusedNodeId,
+  selectedNodeIds,
+  expandedNodeIds: _expandedNodeIds, // Phase-8 consumer
+  onSetFocus,
+  onSetSelected: _onSetSelected, // reserved for caller-driven selection in Phase 8+
   onNodeClick,
   onNodeHover,
   onEdgeClick,
@@ -80,14 +99,12 @@ export function Scene({
     return m;
   }, [data]);
 
-  // Camera focus drives the per-node emphasis highlight and bulge tint. Until
-  // controlled focus lands in Phase 7, the first node (the root) is focused —
-  // matching the original full-tree default (focusId = root). For arbitrary
-  // caller data the array's first node is NOT necessarily semantically the
-  // root; Phase 7 must replace this whole fallback with the `focusedNodeId`
-  // prop (default null/none) + an uncontrolled-mode internal state.
-  // TODO(phase-7): replace with the `focusedNodeId` prop.
-  const focusId = data.nodes[0]?.id ?? "";
+  // Resolved focus comes straight from Unfold's controllable state. `null` =
+  // no node is focused (no bulge tint, no emphasis, camera doesn't track).
+  // The empty string is used downstream when no focus is set, because the
+  // projection/shader pipeline keys on string-id comparisons; "" never
+  // matches a real id.
+  const focusId = focusedNodeId ?? "";
 
   const projection = useMemo(
     () => new SceneProjection(NODE_TEX_HEIGHT, EDGE_TEX_HEIGHT),
@@ -125,6 +142,15 @@ export function Scene({
     [projection, activeKey, focusId],
   );
 
+  // Per-instance "is selected?" flag array, parallel to built.timeline.nodes.
+  // Recomputed when either the active set or the selection identity changes.
+  // Membership is checked via a Set so a moderately large selectedNodeIds
+  // stays O(n) overall.
+  const selectedFlags = useMemo(() => {
+    const sel = new Set(selectedNodeIds);
+    return built.nodeIds.map((id) => sel.has(id));
+  }, [built, selectedNodeIds]);
+
   // Free every GPU resource the projection owns when Scene unmounts.
   useEffect(() => () => projection.dispose(), [projection]);
 
@@ -140,12 +166,19 @@ export function Scene({
   // EdgePicker don't see a new function on every render and re-bind handlers.
   const wiredNodeClick = useCallback(
     (idx: number, event: PointerEvent) => {
-      if (!onNodeClick) return;
       const id = built.nodeIds[idx];
-      const node = id != null ? nodeById.get(id) : undefined;
-      if (node) onNodeClick(node, event);
+      if (id == null) return;
+      // Library default: clicking a node moves focus to it. In uncontrolled
+      // mode this updates the internal focus state; in controlled mode it
+      // just fires onFocusChange so the caller can choose to honor it. This
+      // is the explicit "uncontrolled-mode auto-focus on click" behavior
+      // the design doc describes, and matches the prototype's "click = look
+      // at this node" UX.
+      onSetFocus(id);
+      const node = nodeById.get(id);
+      if (node && onNodeClick) onNodeClick(node, event);
     },
-    [onNodeClick, built, nodeById],
+    [built, nodeById, onSetFocus, onNodeClick],
   );
   const wiredNodeHover = useCallback(
     (idx: number | null, event: PointerEvent) => {
@@ -206,13 +239,18 @@ export function Scene({
       <Nodes
         timeline={built.timeline}
         focusedIndex={built.focusIndex}
+        selectedFlags={selectedFlags}
         fadeAttribute={projection.nodeFade.attribute}
         sphereOpacity={style.node.opacity}
         stableColor={stableColor}
         crisisColor={crisisColor}
+        highlightColor={theme.highlight}
         nodeRadius={style.node.baseRadius}
         rimStrength={style.node.rimStrength}
-        onNodeClick={onNodeClick ? wiredNodeClick : undefined}
+        // Click is always wired now — even without a caller-supplied
+        // onNodeClick the library auto-focuses on node-click in
+        // uncontrolled mode. Hover is gated on the public hover callback.
+        onNodeClick={wiredNodeClick}
         onNodeHover={onNodeHover ? wiredNodeHover : undefined}
       />
       <EdgePicker
