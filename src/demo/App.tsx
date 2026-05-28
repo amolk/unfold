@@ -1,6 +1,6 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { useControls } from "leva";
-import { Unfold } from "../lib";
+import { Unfold, type UnfoldEdge, type UnfoldNode } from "../lib";
 import { applyFlowPreset, buildDemoData, type FlowPreset } from "./demo-data";
 import { useUnfoldStyleControls, useUnfoldThemeControls } from "./leva-panels";
 
@@ -71,9 +71,93 @@ export function App() {
     [baseData, flowPreset, stable, crisis],
   );
 
+  // Last hovered / clicked targets, for the side panel below. Hover state is
+  // cleared on `null` from onNodeHover / onEdgeHover (i.e. pointer-out). The
+  // click state is sticky until a background click resets it.
+  const [hovered, setHovered] = useState<HoverTarget>(null);
+  const [clicked, setClicked] = useState<HoverTarget>(null);
+
   return (
     <Boundary>
-      <Unfold data={data} theme={theme} style={style} />
+      <Unfold
+        data={data}
+        theme={theme}
+        style={style}
+        onNodeHover={(node) => setHovered(node ? { kind: "node", item: node } : null)}
+        onEdgeHover={(edge) => setHovered(edge ? { kind: "edge", item: edge } : null)}
+        onNodeClick={(node) => setClicked({ kind: "node", item: node })}
+        onEdgeClick={(edge) => setClicked({ kind: "edge", item: edge })}
+        onBackgroundClick={() => setClicked(null)}
+      />
+      <SidePanel hovered={hovered} clicked={clicked} />
     </Boundary>
+  );
+}
+
+type HoverTarget =
+  | { kind: "node"; item: UnfoldNode }
+  | { kind: "edge"; item: UnfoldEdge }
+  | null;
+
+/** Read-only inspector showing the last hovered + last clicked item. Lives in
+ *  the demo so the library doesn't ship a DOM overlay. */
+function SidePanel({
+  hovered,
+  clicked,
+}: {
+  hovered: HoverTarget;
+  clicked: HoverTarget;
+}) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        right: 16,
+        bottom: 16,
+        width: 320,
+        background: "rgba(20, 10, 14, 0.85)",
+        border: "1px solid #3a2030",
+        borderRadius: 6,
+        padding: "12px 14px",
+        color: "#d8d0c8",
+        fontFamily: "ui-monospace, monospace",
+        fontSize: 11,
+        lineHeight: 1.45,
+        pointerEvents: "none",
+        zIndex: 10,
+      }}
+    >
+      <Row label="hover" target={hovered} />
+      <div style={{ height: 6 }} />
+      <Row label="click" target={clicked} />
+    </div>
+  );
+}
+
+function Row({ label, target }: { label: string; target: HoverTarget }) {
+  const head = !target
+    ? "—"
+    : `${target.kind} ${target.kind === "node" ? target.item.id : `${target.item.source} → ${target.item.target}`}`;
+  return (
+    <div>
+      <div style={{ color: "#a89890", marginBottom: 2 }}>{label}</div>
+      <div>{head}</div>
+      {target?.item.data != null && (
+        <pre
+          style={{
+            margin: "4px 0 0",
+            color: "#c0b8b0",
+            background: "rgba(0,0,0,0.25)",
+            padding: "4px 6px",
+            borderRadius: 3,
+            maxHeight: 80,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {JSON.stringify(target.item.data, null, 2)}
+        </pre>
+      )}
+    </div>
   );
 }

@@ -196,6 +196,9 @@ export interface SceneProjectionBuilt {
   /** Maps the integer indices used in `timeline` back to the ExplorerNode ids
    *  the click handler dispatches against. */
   nodeIds: string[];
+  /** Same idea for edges — `timeline.edges[i].id === i`; `edgeIds[i]` is the
+   *  public UnfoldEdge.id so picking can resolve back to the caller's edge. */
+  edgeIds: string[];
   focusIndex: number;
 }
 
@@ -373,11 +376,13 @@ export class SceneProjection {
     this.edgeFade.markDirty();
 
     const nodeIds = nodeEntries.map((e) => e.node.id);
+    const edgeIds = edgeEntries.map((e) => e.edge.id);
     const focusIndex = nodeIndex.get(focusId) ?? 0;
 
     return {
       timeline: { nodes: tlNodes, edges: tlEdges },
       nodeIds,
+      edgeIds,
       focusIndex,
     };
   }

@@ -9,7 +9,6 @@ import { DEFAULT_SCENE } from "./defaults";
 interface NodesProps {
   timeline: Timeline;
   focusedIndex?: number;
-  onSelectNode?: (index: number) => void;
   /** Per-instance fade in [0,1]; backing array is mutated by the owner each
    *  frame, we just (re)bind it and set needsUpdate. */
   fadeAttribute: THREE.InstancedBufferAttribute;
@@ -22,18 +21,24 @@ interface NodesProps {
   nodeRadius?: number;
   /** Rim-light strength. Formerly the "Nodes" Leva panel. */
   rimStrength?: number;
+  /** Click handler. Fires with the timeline-index of the clicked node and the
+   *  native PointerEvent. Scene maps the index back to the public UnfoldNode. */
+  onNodeClick?: (index: number, event: PointerEvent) => void;
+  /** Hover handler. Fires with the index on enter and `null` on leave. */
+  onNodeHover?: (index: number | null, event: PointerEvent) => void;
 }
 
 export function Nodes({
   timeline,
   focusedIndex = -1,
-  onSelectNode,
   fadeAttribute,
   sphereOpacity,
   stableColor,
   crisisColor,
   nodeRadius = DEFAULT_SCENE.nodeRadius,
   rimStrength = DEFAULT_SCENE.rimStrength,
+  onNodeClick,
+  onNodeHover,
 }: NodesProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null!);
   const materialRef = useRef<THREE.ShaderMaterial>(null!);
@@ -142,29 +147,40 @@ export function Nodes({
     u.uOpacity.value = sphereOpacity;
   }, [rimStrength, sphereOpacity]);
 
+  // The most-recently-entered instance index, used to suppress stale
+  // pointerOut events from an instance the cursor already moved off of.
+  const hoveredRef = useRef<number | null>(null);
+
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
-    if (e.instanceId == null || !onSelectNode) return;
+    if (e.instanceId == null || !onNodeClick) return;
     e.stopPropagation();
-    onSelectNode(e.instanceId);
+    onNodeClick(e.instanceId, e.nativeEvent as PointerEvent);
   };
   const handlePointerOver = (e: ThreeEvent<PointerEvent>) => {
-    if (!onSelectNode) return;
+    if (e.instanceId == null) return;
     e.stopPropagation();
+    hoveredRef.current = e.instanceId;
     document.body.style.cursor = "pointer";
+    onNodeHover?.(e.instanceId, e.nativeEvent);
   };
-  const handlePointerOut = () => {
-    if (!onSelectNode) return;
+  const handlePointerOut = (e: ThreeEvent<PointerEvent>) => {
+    if (e.instanceId == null) return;
+    if (hoveredRef.current !== e.instanceId) return;
+    hoveredRef.current = null;
     document.body.style.cursor = "";
+    onNodeHover?.(null, e.nativeEvent);
   };
+
+  const hasHandlers = !!onNodeClick || !!onNodeHover;
 
   return (
     <instancedMesh
       ref={meshRef}
       args={[undefined, undefined, Math.max(1, timeline.nodes.length)]}
       frustumCulled={false}
-      onClick={onSelectNode ? handleClick : undefined}
-      onPointerOver={onSelectNode ? handlePointerOver : undefined}
-      onPointerOut={onSelectNode ? handlePointerOut : undefined}
+      onClick={hasHandlers ? handleClick : undefined}
+      onPointerOver={hasHandlers ? handlePointerOver : undefined}
+      onPointerOut={hasHandlers ? handlePointerOut : undefined}
     >
       <sphereGeometry args={[nodeRadius, 32, 24]} />
       <shaderMaterial
