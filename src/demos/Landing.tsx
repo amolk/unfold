@@ -28,6 +28,34 @@ export function Landing() {
       <section style={{ marginBottom: 32 }}>
         <div
           style={{
+            position: "relative",
+            width: "100%",
+            paddingBottom: "56.25%",
+            background: "#000",
+            borderRadius: 6,
+            overflow: "hidden",
+            border: "1px solid #2a1820",
+          }}
+        >
+          <iframe
+            src="https://www.youtube.com/embed/83zju57w1BU"
+            title="Foundation — opening titles"
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              border: 0,
+            }}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+          />
+        </div>
+      </section>
+
+      <section style={{ marginBottom: 32 }}>
+        <div
+          style={{
             color: "#a89890",
             fontSize: 11,
             letterSpacing: "0.12em",
