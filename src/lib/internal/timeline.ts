@@ -17,8 +17,6 @@ export interface TimelineEdge {
   controls: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
   // Visual weight — trunk edges get more particles than fine branches.
   weight: number;
-  fromKind: NodeKind;
-  toKind: NodeKind;
   // Resolved EdgeFlow palette: 1..8 hex colors and matching positive weights.
   // The particle field interleaves them along the stream in these proportions.
   colors: string[];

@@ -18,30 +18,13 @@ uniform float uGrainHaloAmp;  // halo amplitude
 
 uniform float uGlintIntensity;
 
-// Woven multi-pigment palette: three categorical colors, picked per stream
-// in the vertex shader (vPaletteIdx). uWeaveAmount mixes the picked color
-// in over the base stable/crisis tint — 0 = no weaving (original behavior),
-// 1 = pure palette. Lets the field read as red ribbons with blue/gold
-// strands woven through rather than a single tint.
-uniform vec3  uPaletteA;
-uniform vec3  uPaletteB;
-uniform vec3  uPaletteC;
-uniform float uWeaveAmount;
-
 varying float vAlpha;
-varying float vKindMix;
 varying float vNodeProx;
 varying vec3  vNodeCol;
 varying float vIsGlint;
 // Per-particle base color, sampled in the vertex shader from the edge's
-// EdgeFlow palette (uEdgeColors) at this particle's aColorIndex. Replaces the
-// former kind-based stable/crisis mix + per-stream palette weave.
+// EdgeFlow palette (uEdgeColors) at this particle's aColorIndex.
 varying vec3  vColor;
-// Stream identity, forwarded for downstream debugging — not currently read
-// here (the palette is selected via vPaletteIdx instead).
-varying float vStreamId;
-// Per-stream palette bucket: 0=A, 1=B, 2=C. See vertex shader for weights.
-varying float vPaletteIdx;
 // Screen-space tangent direction (gl_PointCoord frame, y-down) and the
 // stretch factor the vertex shader applied to gl_PointSize. The fragment
 // shader uses these to draw an elongated ellipse oriented along the

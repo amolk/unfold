@@ -116,35 +116,20 @@ uniform float uWindSpeed;
 uniform float uGlintRatio;
 uniform float uGlintSizeMult;
 
-// Palette zone size: average distance (in stream-id units) over which the
-// palette bucket varies. Smaller = larger color zones spanning many adjacent
-// streams (whole branches tend to be one pigment). Larger = palette flips
-// more often, approaching salt-and-pepper at ~1.0. The clustering also has
-// a smaller per-edge axis so adjacent edges drift in related palettes.
-uniform float uPaletteZoneScale;
-
 attribute float aCurveIndex;
 attribute float aPhase;
 attribute float aSpeed;
 attribute float aSeed;
-attribute float aFromCrisis;
-attribute float aToCrisis;
 attribute float aRadialAngle;   // per-stream (all particles in a stream share this)
 attribute float aRadialRadius;  // per-stream
 attribute float aStreamId;      // unique id of the stream this particle belongs to
 attribute float aColorIndex;    // EdgeFlow color slot (0..7) for this particle
 
 varying float vAlpha;
-varying vec3  vColor;            // per-particle base color from the edge palette
-varying float vKindMix;
+varying vec3  vColor;           // per-particle base color from the edge palette
 varying float vNodeProx;
 varying vec3  vNodeCol;
 varying float vIsGlint;
-varying float vStreamId;        // forwarded so the fragment shader can pick a pigment later
-// Discrete palette bucket for this particle's stream: 0=A (red, ~70%), 1=B
-// (blue, ~15%), 2=C (gold, ~15%). Deterministic from aStreamId so every
-// particle in a stream shares one pigment — woven sand-on-sand look.
-varying float vPaletteIdx;
 // Screen-space direction of the particle's motion (unit vector in gl_PointCoord
 // space — y is inverted relative to NDC). Used by the fragment shader to align
 // the elongated streak shape with the motion direction.
@@ -272,7 +257,6 @@ vec3 sampleCurve(float idx, float t) {
 }
 
 void main() {
-  vStreamId = aStreamId;
   float life = fract(aPhase + uTime * aSpeed * uSpeedScale);
   float fadeIn  = smoothstep(0.0, 0.02, life);
   float fadeOut = smoothstep(0.0, 0.02, 1.0 - life);
@@ -389,8 +373,6 @@ void main() {
     vAlpha *= gate;
   }
 
-  vKindMix = mix(aFromCrisis, aToCrisis, life);
-
   // Local tangent → perpendicular basis → place particle at (angle, radius)
   // around the curve axis so the trunk reads as a 3D tube.
   float dt = 0.01;
@@ -504,23 +486,6 @@ void main() {
   // grains; the rest are dim matte base. Pure aSeed derivation keeps the
   // partition stable for each particle.
   vIsGlint = step(1.0 - uGlintRatio, fract(aSeed * 0.0317 + 0.456));
-
-  // Palette bucket: discrete spatial zones. We chunk adjacent stream ids
-  // together — floor(streamId * uPaletteZoneScale) — so every stream in
-  // a zone shares one bucket, and each zone draws independently from a
-  // uniform hash. This preserves the 70/15/15 target weighting regardless
-  // of zone size, which a smooth-noise lookup did NOT: value noise clusters
-  // tightly around 0.5, so thresholds at 0.70 / 0.85 were almost never
-  // crossed and the field read as nearly pure palette A.
-  //
-  // uPaletteZoneScale semantics: 1 / streams-per-zone. So scale=0.1 means
-  // ~10 streams share a bucket; scale=1.0 reverts to per-stream random.
-  // Adjacent edges get different bucket sequences naturally because
-  // aStreamId is globally incremented across the geometry — no need for
-  // an explicit per-edge axis.
-  float zoneId = floor(aStreamId * uPaletteZoneScale);
-  float zHash = fract(sin(zoneId * 91.317 + 7.91) * 43758.5453);
-  vPaletteIdx = zHash < 0.70 ? 0.0 : (zHash < 0.85 ? 1.0 : 2.0);
 
   // EdgeFlow base color: sample this particle's color slot from the edge's
   // palette row. uCurveTexHeight is the active edge count = uEdgeColors height,

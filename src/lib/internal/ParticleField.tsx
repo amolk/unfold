@@ -178,12 +178,6 @@ export function ParticleField({
       uGrainCore: { value: 80 },
       uGrainHalo: { value: 8.7 },
       uGrainHaloAmp: { value: 0 },
-      uWeaveAmount: { value: 1.0 },
-      uPaletteZoneScale: { value: 0.42 },
-      // Palette A/B/C defaults — were applied by the Leva mirror effect.
-      uPaletteA: { value: new THREE.Color("#c0202a") },
-      uPaletteB: { value: new THREE.Color("#1a6db0") },
-      uPaletteC: { value: new THREE.Color("#e0a020") },
     }),
     // The bulge arrays only change identity when Scene rebuilds them; otherwise
     // we just mutate in place. We don't list nodeBulge here because creating
@@ -257,8 +251,6 @@ export function ParticleField({
     const phase = new Float32Array(particleCount);
     const speed = new Float32Array(particleCount);
     const seed = new Float32Array(particleCount);
-    const fromCrisis = new Float32Array(particleCount);
-    const toCrisis = new Float32Array(particleCount);
     // EdgeFlow color slot (0..7) per particle. Drawn from each edge's
     // proportions so the declared color mix appears at the requested ratio.
     const colorIndex = new Float32Array(particleCount);
@@ -268,6 +260,11 @@ export function ParticleField({
     const radialRadius = new Float32Array(particleCount);
     const streamId = new Float32Array(particleCount);
 
+    // Constant base particle speed across all edges. Pre-EdgeFlow the
+    // projection carried a kind concept ("crisis" edges ran slightly slower
+    // at 0.045 vs 0.06) but that's dead now; one speed for everyone.
+    const SPEED_BASE = 0.06;
+
     // Streams are global (not per-edge) so noise sampling is distinct between
     // edges. We accumulate a global counter as we lay out edges.
     let globalStreamId = 0;
@@ -276,8 +273,6 @@ export function ParticleField({
       const share = Math.round((edge.weight / totalWeight) * particleCount);
       // Cap streams at the share — empty streams would just waste id-space.
       const streamCount = Math.max(1, Math.min(streamsPerEdge, share));
-      const fc = edge.fromKind === "crisis" ? 1 : 0;
-      const tc = edge.toKind === "crisis" ? 1 : 0;
       // Normalized cumulative distribution over this edge's flow proportions,
       // capped at the 8 palette slots. pickColor() draws a slot per particle.
       const props = edge.proportions.slice(0, 8);
@@ -289,7 +284,6 @@ export function ParticleField({
         for (let i = 0; i < cum.length; i++) if (r <= cum[i]) return i;
         return cum.length - 1;
       };
-      const speedBase = edge.toKind === "crisis" || edge.fromKind === "crisis" ? 0.045 : 0.06;
       // Distribute the edge's particle share evenly across streams, with the
       // remainder spilled into the first few streams.
       const perStream = Math.floor(share / streamCount);
@@ -297,7 +291,7 @@ export function ParticleField({
       // Pick one speed per edge so wisps don't smear (different speeds within
       // a stream would stretch the filament apart). Random spread per-edge
       // keeps inter-edge motion lively.
-      const edgeSpeed = speedBase * (0.6 + Math.random() * 0.9);
+      const edgeSpeed = SPEED_BASE * (0.6 + Math.random() * 0.9);
       for (let sIdx = 0; sIdx < streamCount; sIdx++) {
         const sid = globalStreamId++;
         // Stream-anchor: where on the tube cross-section this wisp emanates
@@ -312,8 +306,6 @@ export function ParticleField({
           phase[p] = (k / Math.max(1, count) + Math.random() * 0.03) % 1;
           speed[p] = edgeSpeed;
           seed[p] = Math.random() * 1000;
-          fromCrisis[p] = fc;
-          toCrisis[p] = tc;
           colorIndex[p] = pickColor();
           radialAngle[p] = sAngle;
           radialRadius[p] = sRadius;
@@ -324,10 +316,8 @@ export function ParticleField({
     while (p < particleCount) {
       curveIndex[p] = 0;
       phase[p] = Math.random();
-      speed[p] = 0.06;
+      speed[p] = SPEED_BASE;
       seed[p] = Math.random() * 1000;
-      fromCrisis[p] = 0;
-      toCrisis[p] = 0;
       colorIndex[p] = 0;
       radialAngle[p] = Math.random() * Math.PI * 2;
       radialRadius[p] = Math.sqrt(Math.random());
@@ -341,8 +331,6 @@ export function ParticleField({
     geom.setAttribute("aPhase", new THREE.BufferAttribute(phase, 1));
     geom.setAttribute("aSpeed", new THREE.BufferAttribute(speed, 1));
     geom.setAttribute("aSeed", new THREE.BufferAttribute(seed, 1));
-    geom.setAttribute("aFromCrisis", new THREE.BufferAttribute(fromCrisis, 1));
-    geom.setAttribute("aToCrisis", new THREE.BufferAttribute(toCrisis, 1));
     geom.setAttribute("aColorIndex", new THREE.BufferAttribute(colorIndex, 1));
     geom.setAttribute("aRadialAngle", new THREE.BufferAttribute(radialAngle, 1));
     geom.setAttribute("aRadialRadius", new THREE.BufferAttribute(radialRadius, 1));

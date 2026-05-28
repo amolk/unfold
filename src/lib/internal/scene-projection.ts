@@ -32,8 +32,6 @@ export interface ProjEdge {
   toId: string;
   controls: Controls;
   weight: number;
-  fromKind: NodeKind;
-  toKind: NodeKind;
   isStub: boolean;
   /** Resolved EdgeFlow palette (1..8 colors) + matching positive weights.
    *  Edges with no `flow` get [defaultEdgeColor] @ [1]. */
@@ -90,6 +88,10 @@ export function normalizeData(
     layout !== "none" && data.nodes.some((n) => !n.position);
   const computed = needsLayout ? layoutLayered(data) : null;
 
+  // `kindOf` is the legacy node-kind bridge — still used by the nodes shader's
+  // two-tone rim (cool/warm based on stable/crisis). The edge side dropped
+  // kind entirely once EdgeFlow took over per-particle colors; the only edge
+  // use of `kindOf` left is membership-checking for stub detection.
   const kindOf = new Map<string, NodeKind>();
   const posOf = new Map<string, THREE.Vector3>();
 
@@ -125,8 +127,6 @@ export function normalizeData(
       toId: e.target,
       controls,
       weight: e.weight ?? 1,
-      fromKind: kindOf.get(e.source) ?? "stable",
-      toKind: kindOf.get(e.target) ?? "stable",
       isStub: !kindOf.has(e.source),
       colors,
       proportions,
@@ -346,8 +346,6 @@ export class SceneProjection {
         to,
         controls: entry.edge.controls,
         weight: entry.edge.weight,
-        fromKind: entry.edge.fromKind,
-        toKind: entry.edge.toKind,
         colors: entry.edge.colors,
         proportions: entry.edge.proportions,
       };

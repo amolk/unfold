@@ -50,7 +50,9 @@ export function App() {
   const { autoLayout, flowPreset } = useControls("Demo", {
     autoLayout: false,
     flowPreset: {
-      value: "single",
+      // Default to the two-color stable+crisis mix so the demo opens on the
+      // prototype's recognizable look; "single" is a single-color stream.
+      value: "two",
       options: ["single", "two", "three", "eight"],
       label: "edge flow",
     },
