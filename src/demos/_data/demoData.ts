@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { UnfoldData, UnfoldEdge, UnfoldNode, Vec3 } from "../lib";
+import type { UnfoldData, UnfoldEdge, UnfoldNode, Vec3 } from "../../lib";
 
 // --- EdgeFlow demo presets ------------------------------------------------
 

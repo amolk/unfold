@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Unfold, type UnfoldLayout } from "../../lib";
-import { buildDemoData } from "../../demo/demo-data";
+import { buildDemoData } from "../_data/demoData";
 
 // `buildDemoData(..., { positioned: false })` returns topology only — no
 // positions, no edge controls — so the library's chosen layout drives the
