@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { OrbitControls } from "@react-three/drei";
-import { useFrame } from "@react-three/fiber";
 import { ParticleField } from "./ParticleField";
 import { Nodes } from "./Nodes";
 import { EdgePicker } from "./picking/edge-picker";
 import { Affordance } from "./picking/affordance";
-import { SceneProjection, normalizeData } from "./scene-projection";
+import { useTimelineEngine } from "./use-timeline-engine";
 import type { ResolvedStyle, ResolvedTheme } from "./defaults";
 import type {
   NodeId,
@@ -14,15 +13,6 @@ import type {
   UnfoldLayout,
   UnfoldNode,
 } from "../types";
-
-// Hard cap for the shader's bulge loop and the height of the node-data
-// textures (and per-node fade attribute, and per-edge fade texture). The
-// shader / draw count clips to the live entry count, so GPU work scales
-// with active entries — these caps just bound the steady-state allocation.
-// 4096 fits any realistic tree without re-allocating; chosen to match
-// MAX_VERTEX_TEXTURE_IMAGE_UNITS headroom across desktop GPUs.
-const NODE_TEX_HEIGHT = 4096;
-const EDGE_TEX_HEIGHT = 4096;
 
 interface SceneProps {
   /** The graph to render. Phase 2: positions/controls supplied by the caller;
@@ -87,33 +77,34 @@ export function Scene({
 }: SceneProps) {
   const stableColor = theme.stableColor;
   const crisisColor = theme.crisisColor;
-  const fadeSpeed = style.fade.speed;
-  // Normalize the public data into the projection's internal shape. Re-run when
-  // the data identity or layout strategy changes; auto-layout fills positions
-  // for any node missing one (unless layout="none"), and each edge's flow is
-  // resolved to concrete colors (falling back to the theme's default edge color).
-  const normalized = useMemo(
-    () =>
-      normalizeData(
-        data,
-        layout,
-        theme.defaultEdgeFlow,
-        theme.categories,
-        theme.defaultNodeColor,
-      ),
-    [
-      data,
-      layout,
-      theme.defaultEdgeFlow,
-      theme.categories,
-      theme.defaultNodeColor,
-    ],
-  );
+
+  // Resolved focus comes straight from Unfold's controllable state. `null` =
+  // no node is focused (no bulge tint, no emphasis, camera doesn't track).
+  // The empty string is used downstream when no focus is set, because the
+  // projection/shader pipeline keys on string-id comparisons; "" never
+  // matches a real id.
+  const focusId = focusedNodeId ?? "";
+
+  // The entire data→GPU pipeline — normalize + the SceneProjection lifecycle
+  // (sync/build on data/layout/theme change) + the per-frame fade & bulge loop
+  // + disposal — now lives behind this one hook. It returns exactly what the
+  // children below bind to. focusIndex is computed off the build so a focus
+  // change doesn't mint a new timeline (which would reset ParticleField's
+  // per-particle attributes).
+  const {
+    timeline,
+    nodeIds,
+    edgeIds,
+    focusIndex,
+    nodeFade,
+    edgeFade,
+    nodeBulge,
+  } = useTimelineEngine({ data, layout, theme, style, focusId });
 
   // Index the original (public) nodes and edges by id so the picker callbacks
   // can echo the caller's exact UnfoldNode / UnfoldEdge objects back. The
-  // projection's index→string-id maps + these two maps complete the round trip
-  // pickEvent → timeline-index → string-id → public object.
+  // build's index→string-id arrays (nodeIds/edgeIds) + these two maps complete
+  // the round trip pickEvent → timeline-index → string-id → public object.
   const nodeById = useMemo(() => {
     const m = new Map<string, UnfoldNode>();
     for (const n of data.nodes) m.set(n.id, n);
@@ -125,64 +116,14 @@ export function Scene({
     return m;
   }, [data]);
 
-  // Resolved focus comes straight from Unfold's controllable state. `null` =
-  // no node is focused (no bulge tint, no emphasis, camera doesn't track).
-  // The empty string is used downstream when no focus is set, because the
-  // projection/shader pipeline keys on string-id comparisons; "" never
-  // matches a real id.
-  const focusId = focusedNodeId ?? "";
-
-  const projection = useMemo(
-    () => new SceneProjection(NODE_TEX_HEIGHT, EDGE_TEX_HEIGHT),
-    [],
-  );
-
-  // Per-node colors are pre-resolved on ProjNode (writeBulgeData reads
-  // them directly), so the stable/crisis-color staging that lived here
-  // is gone with the kind-based color path.
-
-  // Bumped when sync reports a topology change, so the projection's `built`
-  // bundle is rebuilt. NOT bumped on every fade tick — those write through to
-  // GPU mirrors that stay bound across frames.
-  const [activeKey, setActiveKey] = useState(0);
-
-  // Sync the projection's active set against the normalized scene, then bump
-  // activeKey so `built` rebuilds. We bump on every normalized-identity change
-  // (not only when sync reports topology change) because data-only updates —
-  // new bezier `controls` after a layout toggle, new edge `colors` after a
-  // flow-preset change, repositioned nodes — must propagate through build() to
-  // the Timeline (and from there to ParticleField's curve / edge-color
-  // textures + geometry). The cost is a rebuild on each `data` prop swap; on a
-  // demo-sized tree that's microseconds. The projection prunes finished-fade
-  // entries inside sync() — see SceneProjection.sync.
-  useEffect(() => {
-    projection.sync(normalized);
-    setActiveKey((k) => k + 1);
-  }, [normalized, projection]);
-
-  const built = useMemo(
-    () => projection.build(),
-    [projection, activeKey],
-  );
-  // Compute focusIndex outside the timeline build so a focus change doesn't
-  // mint a new timeline object — which would re-trigger ParticleField's
-  // useMemos and reset every per-particle attribute. -1 (not 0) when the
-  // focus is null / unknown so the Nodes shader's
-  // `aInstanceEmphasis[i === focusedIndex ? 1 : 0]` test fails for every
-  // node — i.e. no node is emphasized when focus is null.
-  const focusIndex = useMemo(() => {
-    if (!focusId) return -1;
-    return built.nodeIds.indexOf(focusId);
-  }, [built, focusId]);
-
-  // Per-instance "is selected?" flag array, parallel to built.timeline.nodes.
+  // Per-instance "is selected?" flag array, parallel to timeline.nodes.
   // Recomputed when either the active set or the selection identity changes.
   // Membership is checked via a Set so a moderately large selectedNodeIds
   // stays O(n) overall.
   const selectedFlags = useMemo(() => {
     const sel = new Set(selectedNodeIds);
-    return built.nodeIds.map((id) => sel.has(id));
-  }, [built, selectedNodeIds]);
+    return nodeIds.map((id) => sel.has(id));
+  }, [nodeIds, selectedNodeIds]);
 
   // Phase 8: compute the list of nodes that should display the
   // expand-affordance ring — `expandable === true` AND not in
@@ -193,16 +134,16 @@ export function Scene({
     if (!onNodeExpand) return [];
     const expanded = new Set(expandedNodeIds);
     const out: { index: number; position: [number, number, number] }[] = [];
-    for (let i = 0; i < built.nodeIds.length; i++) {
-      const id = built.nodeIds[i];
+    for (let i = 0; i < nodeIds.length; i++) {
+      const id = nodeIds[i];
       const node = nodeById.get(id);
       if (!node?.expandable) continue;
       if (expanded.has(id)) continue;
-      const p = built.timeline.nodes[i].position;
+      const p = timeline.nodes[i].position;
       out.push({ index: i, position: [p.x, p.y, p.z] });
     }
     return out;
-  }, [built, nodeById, expandedNodeIds, onNodeExpand]);
+  }, [nodeIds, timeline, nodeById, expandedNodeIds, onNodeExpand]);
 
   const affordancePositions = useMemo(
     () => affordances.map((a) => a.position),
@@ -214,29 +155,20 @@ export function Scene({
       if (!onNodeExpand) return;
       const a = affordances[idx];
       if (!a) return;
-      const id = built.nodeIds[a.index];
+      const id = nodeIds[a.index];
       const node = id != null ? nodeById.get(id) : undefined;
       if (node) onNodeExpand(node);
     },
-    [affordances, built, nodeById, onNodeExpand],
+    [affordances, nodeIds, nodeById, onNodeExpand],
   );
 
-  // Free every GPU resource the projection owns when Scene unmounts.
-  useEffect(() => () => projection.dispose(), [projection]);
-
-  useFrame((_, dt) => {
-    const k = 1 - Math.exp(-dt * fadeSpeed);
-    projection.tickFades(k);
-    projection.writeBulgeData(focusId);
-  });
-
   // Wire internal index-based callbacks into the public (item, event)
-  // signatures. The translation index → built.nodeIds[i] → nodeById is the
-  // exact round trip described above. Wrapped in useCallback so Nodes /
-  // EdgePicker don't see a new function on every render and re-bind handlers.
+  // signatures. The translation index → nodeIds[i] → nodeById is the exact
+  // round trip described above. Wrapped in useCallback so Nodes / EdgePicker
+  // don't see a new function on every render and re-bind handlers.
   const wiredNodeClick = useCallback(
     (idx: number, event: PointerEvent) => {
-      const id = built.nodeIds[idx];
+      const id = nodeIds[idx];
       if (id == null) return;
       // Library default: clicking a node moves focus to it. In uncontrolled
       // mode this updates the internal focus state; in controlled mode it
@@ -248,7 +180,7 @@ export function Scene({
       const node = nodeById.get(id);
       if (node && onNodeClick) onNodeClick(node, event);
     },
-    [built, nodeById, onSetFocus, onNodeClick],
+    [nodeIds, nodeById, onSetFocus, onNodeClick],
   );
   const wiredNodeHover = useCallback(
     (idx: number | null, event: PointerEvent) => {
@@ -257,20 +189,20 @@ export function Scene({
         onNodeHover(null, event);
         return;
       }
-      const id = built.nodeIds[idx];
+      const id = nodeIds[idx];
       const node = id != null ? nodeById.get(id) : undefined;
       if (node) onNodeHover(node, event);
     },
-    [onNodeHover, built, nodeById],
+    [onNodeHover, nodeIds, nodeById],
   );
   const wiredEdgeClick = useCallback(
     (idx: number, event: PointerEvent) => {
       if (!onEdgeClick) return;
-      const id = built.edgeIds[idx];
+      const id = edgeIds[idx];
       const edge = id != null ? edgeById.get(id) : undefined;
       if (edge) onEdgeClick(edge, event);
     },
-    [onEdgeClick, built, edgeById],
+    [onEdgeClick, edgeIds, edgeById],
   );
   const wiredEdgeHover = useCallback(
     (idx: number | null, event: PointerEvent) => {
@@ -279,19 +211,19 @@ export function Scene({
         onEdgeHover(null, event);
         return;
       }
-      const id = built.edgeIds[idx];
+      const id = edgeIds[idx];
       const edge = id != null ? edgeById.get(id) : undefined;
       if (edge) onEdgeHover(edge, event);
     },
-    [onEdgeHover, built, edgeById],
+    [onEdgeHover, edgeIds, edgeById],
   );
 
   return (
     <>
       <ParticleField
-        timeline={built.timeline}
-        edgeFadeTexture={projection.edgeFade.texture}
-        nodeBulge={projection.nodeBulge}
+        timeline={timeline}
+        edgeFadeTexture={edgeFade.texture}
+        nodeBulge={nodeBulge}
         stableColor={stableColor}
         crisisColor={crisisColor}
         particlesPerEdge={style.edge.density}
@@ -307,10 +239,10 @@ export function Scene({
         glintIntensity={style.edge.glintIntensity}
       />
       <Nodes
-        timeline={built.timeline}
+        timeline={timeline}
         focusedIndex={focusIndex}
         selectedFlags={selectedFlags}
-        fadeAttribute={projection.nodeFade.attribute}
+        fadeAttribute={nodeFade.attribute}
         sphereOpacity={style.node.opacity}
         highlightColor={theme.highlight}
         nodeRadius={style.node.baseRadius}
@@ -322,7 +254,7 @@ export function Scene({
         onNodeHover={onNodeHover ? wiredNodeHover : undefined}
       />
       <EdgePicker
-        timeline={built.timeline}
+        timeline={timeline}
         onEdgeClick={onEdgeClick ? wiredEdgeClick : undefined}
         onEdgeHover={onEdgeHover ? wiredEdgeHover : undefined}
       />
