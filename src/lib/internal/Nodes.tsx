@@ -19,9 +19,6 @@ interface NodesProps {
   fadeAttribute: THREE.InstancedBufferAttribute;
   /** 0 = invisible (still raycastable for clicks), 1 = full sun-surface look. */
   sphereOpacity: number;
-  /** From the shared theme — see defaults.ts / theme prop. */
-  stableColor: string;
-  crisisColor: string;
   /** Hex color used as the rim tint for selected nodes. */
   highlightColor: string;
   /** Sphere radius. Formerly the "Nodes" Leva panel. */
@@ -41,8 +38,6 @@ export function Nodes({
   selectedFlags,
   fadeAttribute,
   sphereOpacity,
-  stableColor,
-  crisisColor,
   highlightColor,
   nodeRadius = DEFAULT_SCENE.nodeRadius,
   rimStrength = DEFAULT_SCENE.rimStrength,
@@ -52,27 +47,27 @@ export function Nodes({
   const meshRef = useRef<THREE.InstancedMesh>(null!);
   const materialRef = useRef<THREE.ShaderMaterial>(null!);
 
-  // Static per-instance buffers (colors, kinds) rebuilt when the visible set
-  // changes. Scale and emphasis are recomputed when focusedIndex changes.
-  const { positions, instColors, instKinds } = useMemo(() => {
+  // Static per-instance buffers (positions, resolved per-node colors) rebuilt
+  // when the visible set changes. Color comes from TimelineNode.color, which
+  // is pre-resolved on the projection side (node.color → theme.categories[
+  // category] → defaultNodeColor). Scale and emphasis are recomputed when
+  // focusedIndex changes.
+  const { positions, instColors } = useMemo(() => {
     const n = timeline.nodes.length;
     const positions = new Float32Array(n * 3);
     const instColors = new Float32Array(n * 3);
-    const instKinds = new Float32Array(n);
-    const stable = new THREE.Color(stableColor);
-    const crisis = new THREE.Color(crisisColor);
+    const tmp = new THREE.Color();
     timeline.nodes.forEach((node, i) => {
       positions[i * 3 + 0] = node.position.x;
       positions[i * 3 + 1] = node.position.y;
       positions[i * 3 + 2] = node.position.z;
-      const col = node.kind === "crisis" ? crisis : stable;
-      instColors[i * 3 + 0] = col.r;
-      instColors[i * 3 + 1] = col.g;
-      instColors[i * 3 + 2] = col.b;
-      instKinds[i] = node.kind === "crisis" ? 1 : 0;
+      tmp.set(node.color);
+      instColors[i * 3 + 0] = tmp.r;
+      instColors[i * 3 + 1] = tmp.g;
+      instColors[i * 3 + 2] = tmp.b;
     });
-    return { positions, instColors, instKinds };
-  }, [timeline, stableColor, crisisColor]);
+    return { positions, instColors };
+  }, [timeline]);
 
   // Apply instance matrices + (re)bind the static per-instance attributes.
   // `nodeRadius` is in the deps because changing it makes R3F rebuild the
@@ -102,11 +97,7 @@ export function Nodes({
       "aInstanceColor",
       new THREE.InstancedBufferAttribute(instColors, 3),
     );
-    geom.setAttribute(
-      "aInstanceKind",
-      new THREE.InstancedBufferAttribute(instKinds, 1),
-    );
-  }, [timeline, positions, instColors, instKinds, nodeRadius]);
+  }, [timeline, positions, instColors, nodeRadius]);
 
   // (Re)bind the externally-owned fade attribute. Backing array is mutated by
   // the parent each frame; we don't recreate it here. `nodeRadius` is in the

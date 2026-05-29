@@ -2,6 +2,8 @@ import * as THREE from "three";
 import type { Timeline, TimelineEdge, TimelineNode, NodeKind } from "./timeline";
 import type { UnfoldData, UnfoldEdge, UnfoldLayout, Vec3 } from "../types";
 import { layoutLayered } from "./layout/layered";
+import { layoutRadial } from "./layout/radial";
+import { layoutHierarchical } from "./layout/hierarchical";
 import { deriveBezierControls } from "./layout/bezier";
 import {
   createMirroredAttribute,
@@ -12,15 +14,21 @@ import {
 
 type Controls = [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
 
-/** A node normalized from the public UnfoldData into the GPU-friendly shape the
- *  projection works in: a resolved world position, a legacy stable/crisis kind
- *  (derived from `category` until the Phase 5 EdgeFlow path replaces it), and a
- *  depth (vestigial — kept for the Timeline shape). */
+/** A node normalized from the public UnfoldData into the GPU-friendly shape
+ *  the projection works in: a resolved world position, a resolved hex color
+ *  (from `node.color` → `theme.categories[node.category]` → defaultNodeColor),
+ *  a pre-built THREE.Color for the per-frame bulge writer, a legacy
+ *  stable/crisis kind (retained so the bulge prox still distinguishes warm /
+ *  cool seeds — see writeBulgeData), and a vestigial depth. */
 export interface ProjNode {
   id: string;
   position: THREE.Vector3;
   kind: NodeKind;
   depth: number;
+  /** Resolved per-node hex color. */
+  color: string;
+  /** Same color, pre-built once so per-frame writeBulgeData doesn't allocate. */
+  colorObj: THREE.Color;
 }
 
 /** An edge normalized from UnfoldData. `isStub` marks an edge whose `source`
@@ -34,9 +42,11 @@ export interface ProjEdge {
   weight: number;
   isStub: boolean;
   /** Resolved EdgeFlow palette (1..8 colors) + matching positive weights.
-   *  Edges with no `flow` get [defaultEdgeColor] @ [1]. */
+   *  Edges with no `flow` get the caller-supplied defaultEdgeFlow. */
   colors: string[];
   proportions: number[];
+  /** Per-edge speed multiplier from `EdgeFlow.speed`. Default 1.0. */
+  speedMultiplier: number;
 }
 
 export interface NormalizedScene {
@@ -56,16 +66,20 @@ const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
  *    straight/degenerate line when an endpoint is missing (e.g. a stub edge).
  *  - an edge whose `source` is not among the nodes is flagged `isStub`. */
 /** Resolve an edge's public `flow` into a concrete (colors, proportions) pair.
- *  Missing/empty flow → a single default-colored stream. Colors are capped at
- *  8; proportions are coerced to non-negative and fall back to equal weights
- *  when absent, mismatched in length, or all zero. */
+ *  Missing/empty flow → the caller-supplied default stream (which may itself
+ *  be a multi-color mix). Colors are capped at 8; proportions are coerced to
+ *  non-negative and fall back to equal weights when absent, mismatched in
+ *  length, or all zero. */
 function resolveFlow(
   e: UnfoldEdge,
-  defaultEdgeColor: string,
+  defaultEdgeFlow: { colors: string[]; proportions: number[] },
 ): { colors: string[]; proportions: number[] } {
   const f = e.flow;
   if (!f || !f.colors || f.colors.length === 0) {
-    return { colors: [defaultEdgeColor], proportions: [1] };
+    return {
+      colors: defaultEdgeFlow.colors.slice(0, 8),
+      proportions: defaultEdgeFlow.proportions.slice(0, 8),
+    };
   }
   const colors = f.colors.slice(0, 8);
   let proportions =
@@ -81,12 +95,25 @@ function resolveFlow(
 export function normalizeData(
   data: UnfoldData,
   layout: UnfoldLayout = "layered",
-  defaultEdgeColor = "#8CD0FF",
+  defaultEdgeFlow: { colors: string[]; proportions: number[] } = {
+    colors: ["#8CD0FF"],
+    proportions: [1],
+  },
+  /** Resolved per-node color sources. `node.color` wins, else
+   *  `categories[node.category]`, else `defaultNodeColor`. */
+  categories: Record<string, string> = {},
+  defaultNodeColor = "#8CD0FF",
 ): NormalizedScene {
   // Only auto-layout when something needs it and the caller hasn't opted out.
   const needsLayout =
     layout !== "none" && data.nodes.some((n) => !n.position);
-  const computed = needsLayout ? layoutLayered(data) : null;
+  const computed = needsLayout
+    ? layout === "radial"
+      ? layoutRadial(data)
+      : layout === "hierarchical"
+        ? layoutHierarchical(data)
+        : layoutLayered(data)
+    : null;
 
   // `kindOf` is the legacy node-kind bridge — still used by the nodes shader's
   // two-tone rim (cool/warm based on stable/crisis). The edge side dropped
@@ -101,7 +128,20 @@ export function normalizeData(
     const position = v3(tuple);
     kindOf.set(n.id, kind);
     posOf.set(n.id, position);
-    return { id: n.id, position, kind, depth: 0 };
+    // Color resolution precedence: explicit hex on the node > theme.categories
+    // lookup by category name > defaultNodeColor.
+    const color =
+      n.color ??
+      (n.category ? categories[n.category] : undefined) ??
+      defaultNodeColor;
+    return {
+      id: n.id,
+      position,
+      kind,
+      depth: 0,
+      color,
+      colorObj: new THREE.Color(color),
+    };
   });
 
   const edges: ProjEdge[] = data.edges.map((e) => {
@@ -120,7 +160,11 @@ export function normalizeData(
     } else {
       controls = straightControls(from, to);
     }
-    const { colors, proportions } = resolveFlow(e, defaultEdgeColor);
+    const { colors, proportions } = resolveFlow(e, defaultEdgeFlow);
+    // EdgeFlow.speed is optional and must be positive — coerce non-positive
+    // / missing to 1.0 so a misconfigured edge falls back to baseline.
+    const rawSpeed = e.flow?.speed;
+    const speedMultiplier = rawSpeed !== undefined && rawSpeed > 0 ? rawSpeed : 1;
     return {
       id: e.id,
       fromId: e.source,
@@ -130,6 +174,7 @@ export function normalizeData(
       isStub: !kindOf.has(e.source),
       colors,
       proportions,
+      speedMultiplier,
     };
   });
 
@@ -199,7 +244,6 @@ export interface SceneProjectionBuilt {
   /** Same idea for edges — `timeline.edges[i].id === i`; `edgeIds[i]` is the
    *  public UnfoldEdge.id so picking can resolve back to the caller's edge. */
   edgeIds: string[];
-  focusIndex: number;
 }
 
 /** Projects an ExplorerState's visible scene into the GPU-friendly Timeline
@@ -323,8 +367,13 @@ export class SceneProjection {
   /** Build the renderable bundle from the current active entries. Writes
    *  fade + per-edge G-channel flag into the one-shot mirrors (first N
    *  slots); the children's bindings to `nodeFade`/`edgeFade` are stable
-   *  across builds, so there's no GPU resource to dispose. */
-  build(focusId: string): SceneProjectionBuilt {
+   *  across builds, so there's no GPU resource to dispose.
+   *
+   *  Intentionally does NOT take focusId: the timeline only depends on
+   *  the active topology. Recomputing it on focus change would invalidate
+   *  the consumer's `useMemo([timeline, ...])` and force ParticleField to
+   *  reallocate every per-particle attribute, restarting the streams. */
+  build(): SceneProjectionBuilt {
     const nodeEntries = Array.from(this.nodes.values());
     const edgeEntries = Array.from(this.edges.values());
 
@@ -337,6 +386,7 @@ export class SceneProjection {
         position: entry.node.position,
         kind: entry.node.kind,
         depth: entry.node.depth,
+        color: entry.node.color,
       };
     });
 
@@ -352,6 +402,7 @@ export class SceneProjection {
         weight: entry.edge.weight,
         colors: entry.edge.colors,
         proportions: entry.edge.proportions,
+        speedMultiplier: entry.edge.speedMultiplier,
       };
     });
 
@@ -378,17 +429,11 @@ export class SceneProjection {
 
     const nodeIds = nodeEntries.map((e) => e.node.id);
     const edgeIds = edgeEntries.map((e) => e.edge.id);
-    // -1 (not 0) when `focusId` is empty/unknown so the Nodes shader's
-    // `aInstanceEmphasis[i === focusedIndex ? 1 : 0]` test fails for every
-    // node — i.e. no node is emphasized when focus is `null`. The previous
-    // `?? 0` accidentally highlighted node 0 in that case.
-    const focusIndex = nodeIndex.get(focusId) ?? -1;
 
     return {
       timeline: { nodes: tlNodes, edges: tlEdges },
       nodeIds,
       edgeIds,
-      focusIndex,
     };
   }
 
@@ -415,15 +460,16 @@ export class SceneProjection {
 
   /** Repopulate the node-bulge mirrored textures for the shader. Skips
    *  lingering dead entries (fade < 0.005) so they don't consume one of the
-   *  texHeight slots. */
-  writeBulgeData(focusId: string, stableColor: THREE.Color, crisisColor: THREE.Color) {
+   *  texHeight slots. Per-node color is taken from the pre-built
+   *  ProjNode.colorObj so this hot loop doesn't allocate. */
+  writeBulgeData(focusId: string) {
     const { posFade, colorEmph, count, texHeight } = this.nodeBulge;
     let bi = 0;
     for (const entry of this.nodes.values()) {
       if (bi >= texHeight) break;
       if (entry.fade < 0.005) continue;
       const p4 = bi * 4;
-      const c = entry.node.kind === "crisis" ? crisisColor : stableColor;
+      const c = entry.node.colorObj;
       posFade.data[p4 + 0] = entry.node.position.x;
       posFade.data[p4 + 1] = entry.node.position.y;
       posFade.data[p4 + 2] = entry.node.position.z;

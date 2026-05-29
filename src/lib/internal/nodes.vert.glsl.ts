@@ -5,7 +5,6 @@ export const nodesVert = /* glsl */ `
 precision highp float;
 
 attribute vec3 aInstanceColor;
-attribute float aInstanceKind; // 0 = stable, 1 = crisis
 attribute float aInstanceScale;
 attribute float aInstanceEmphasis; // 0 = normal, 1 = focused
 attribute float aInstanceSelected; // 0 = unselected, 1 = in selectedNodeIds
@@ -14,7 +13,6 @@ attribute float aInstanceFade;     // 0 = invisible, 1 = full size
 varying vec3 vNormal;
 varying vec3 vViewDir;
 varying vec3 vInstColor;
-varying float vKind;
 varying float vEmphasis;
 varying float vSelected;
 
@@ -33,7 +31,6 @@ void main() {
   vViewDir = normalize(-mv.xyz);
 
   vInstColor = aInstanceColor;
-  vKind = aInstanceKind;
   vEmphasis = aInstanceEmphasis;
   vSelected = aInstanceSelected;
 

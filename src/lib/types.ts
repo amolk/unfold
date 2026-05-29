@@ -120,7 +120,7 @@ export interface UnfoldStyle {
   };
 }
 
-export type UnfoldLayout = "layered" | "radial" | "none";
+export type UnfoldLayout = "layered" | "radial" | "hierarchical" | "none";
 export type UnfoldCameraMode = "3d" | "2d";
 
 export interface UnfoldCameraState {

@@ -9,12 +9,33 @@ import type { UnfoldStyle, UnfoldTheme } from "../types";
 /** Canvas clear + fog color. */
 export const DEFAULT_BACKGROUND = "#1a0810";
 
-/** Stable/crisis node colors — formerly the shared Theme panel in theme.ts.
- *  These remain the internal color model until Phase 5 replaces the kind-based
- *  coloring with EdgeFlow-driven colors. */
+/** Default node + edge palette. Names are vestigial from the prototype's
+ *  stable/crisis dichotomy and stay because Scene/Nodes/projection still
+ *  reference them; semantically `stableColor` is now "default node color"
+ *  and `crisisColor` is the warm/red accent used for the legacy bulge
+ *  shading. The actual default edge stream is the multi-color
+ *  DEFAULT_EDGE_FLOW below.
+ *  Gold + deep red picks up the Foundation desert-and-empire palette the
+ *  project is themed around. */
 export const DEFAULT_THEME = {
-  stableColor: "#8CD0FF",
-  crisisColor: "#FFB060",
+  stableColor: "#F5D8B9", // gold — default node color
+  crisisColor: "#871B24", // red  — accent
+} as const;
+
+/** Default particle-stream mix for edges with no `flow` spec. Red-dominant
+ *  with a gold rhythm and a faint blue thread — the desert/empire palette
+ *  plus a cool counterpoint.
+ *
+ *  Gold is `#D4A642` (deeper amber) rather than the design-doc's pale
+ *  `#F5D8B9`: with additive blending + bloom, two or three pale-gold
+ *  particles overlap and saturate every channel to 1.0, reading as pure
+ *  white. The amber stays visibly gold even where particles stack.
+ *
+ *  Overridden by `theme.defaultEdgeColor` (collapses to a single-color
+ *  stream) or by a per-edge `flow`. */
+export const DEFAULT_EDGE_FLOW = {
+  colors: ["#871B24", "#D4A642", "#5BA3D9"],
+  proportions: [90, 5, 5],
 } as const;
 
 /** Scene-level scalars formerly on the "Explorer" / "Nodes" Leva panels. */
@@ -62,8 +83,17 @@ export interface ResolvedTheme {
   background: string;
   stableColor: string;
   crisisColor: string;
-  /** Stream color for edges that carry no `flow` spec (Phase 5). */
-  defaultEdgeColor: string;
+  /** Fallback hex used for a node with no `color` and no matching
+   *  `category` entry. */
+  defaultNodeColor: string;
+  /** Generic category → color map. Defaults to {stable, crisis} from
+   *  DEFAULT_THEME so the prototype's two-tone data still has colors when
+   *  no theme is provided; caller-supplied entries override or extend. */
+  categories: Record<string, string>;
+  /** Particle-stream mix used for any edge with no `flow` spec. If the
+   *  caller sets `theme.defaultEdgeColor` this collapses to a single-color
+   *  stream; otherwise it's `DEFAULT_EDGE_FLOW`. */
+  defaultEdgeFlow: { colors: string[]; proportions: number[] };
   /** Rim tint used for nodes whose id appears in `selectedNodeIds`. */
   highlight: string;
 }
@@ -96,17 +126,35 @@ export interface ResolvedStyle {
 }
 
 export function resolveTheme(theme?: UnfoldTheme): ResolvedTheme {
-  const categories = theme?.categories;
+  const userCategories = theme?.categories;
+  // Fold user categories on top of the {stable, crisis} default pair so
+  // prototype data without an explicit theme still gets two distinct colors,
+  // while arbitrary new category names ("input", "task", whatever) work too.
+  const categories: Record<string, string> = {
+    stable: DEFAULT_THEME.stableColor,
+    crisis: DEFAULT_THEME.crisisColor,
+    ...(userCategories ?? {}),
+  };
+  const defaultNodeColor =
+    theme?.defaultNodeColor ?? DEFAULT_THEME.stableColor;
+  // If the caller picked an explicit single edge color (theme.defaultEdgeColor
+  // or — for legacy — categories.stable / defaultNodeColor), collapse the
+  // default flow to that one color. Otherwise use the multi-color default mix.
+  const singleEdgeColor =
+    theme?.defaultEdgeColor ?? userCategories?.stable ?? theme?.defaultNodeColor;
+  const defaultEdgeFlow = singleEdgeColor
+    ? { colors: [singleEdgeColor], proportions: [1] }
+    : {
+        colors: [...DEFAULT_EDGE_FLOW.colors],
+        proportions: [...DEFAULT_EDGE_FLOW.proportions],
+      };
   return {
     background: theme?.background ?? DEFAULT_BACKGROUND,
-    stableColor:
-      categories?.stable ?? theme?.defaultNodeColor ?? DEFAULT_THEME.stableColor,
-    crisisColor: categories?.crisis ?? DEFAULT_THEME.crisisColor,
-    defaultEdgeColor:
-      theme?.defaultEdgeColor ??
-      categories?.stable ??
-      theme?.defaultNodeColor ??
-      DEFAULT_THEME.stableColor,
+    stableColor: categories.stable,
+    crisisColor: categories.crisis,
+    defaultNodeColor,
+    categories,
+    defaultEdgeFlow,
     highlight: theme?.highlight ?? DEFAULT_HIGHLIGHT,
   };
 }

@@ -7,6 +7,10 @@ export interface TimelineNode {
   position: THREE.Vector3;
   kind: NodeKind;
   depth: number;
+  /** Resolved hex color for this node (see ProjNode for resolution
+   *  precedence). The Nodes component converts to THREE.Color for the
+   *  per-instance shader attribute. */
+  color: string;
 }
 
 export interface TimelineEdge {
@@ -21,6 +25,9 @@ export interface TimelineEdge {
   // The particle field interleaves them along the stream in these proportions.
   colors: string[];
   proportions: number[];
+  // Per-edge speed multiplier from `EdgeFlow.speed`. 1.0 = baseline; higher
+  // is faster. Applied on top of the random per-edge jitter in ParticleField.
+  speedMultiplier: number;
 }
 
 export interface Timeline {

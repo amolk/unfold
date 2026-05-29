@@ -59,6 +59,8 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
     onNodeExpand,
     onFocusChange,
     onSelectionChange,
+    initialCamera,
+    cameraMode = "3d",
   },
   _ref,
 ) {
@@ -90,10 +92,38 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
     // No onExpandedChange yet — Phase 8 wires expand-affordance UI.
   });
 
+  // 2D mode: orthographic projection (no foreshortening) + camera on +x
+  // looking at origin. The `radial` and `hierarchical` layouts are designed
+  // flat on the y/z plane, which is exactly what an orthographic +x camera
+  // sees face-on. `layered` will look squashed in 2D — pick a layout that
+  // matches your camera mode.
+  const isOrtho = cameraMode === "2d";
+  const defaultCameraPos: [number, number, number] = isOrtho
+    ? [10, 0, 0]
+    : [9, 1.2, 0];
+  const defaultCameraTarget: [number, number, number] = isOrtho
+    ? [0, 0, 0]
+    : [0, 1.8, 0];
+
   return (
     <Canvas
       gl={{ antialias: false, alpha: false, powerPreference: "high-performance" }}
-      camera={{ position: [9, 1.2, 0], fov: 38, near: 0.1, far: 200 }}
+      orthographic={isOrtho}
+      camera={
+        isOrtho
+          ? {
+              position: initialCamera?.position ?? defaultCameraPos,
+              zoom: 45,
+              near: 0.1,
+              far: 200,
+            }
+          : {
+              position: initialCamera?.position ?? defaultCameraPos,
+              fov: 38,
+              near: 0.1,
+              far: 200,
+            }
+      }
       dpr={[1, 1.5]}
       onCreated={({ gl }) => {
         gl.setClearColor(bg, 1);
@@ -127,6 +157,8 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
         onEdgeClick={onEdgeClick}
         onEdgeHover={onEdgeHover}
         onNodeExpand={onNodeExpand}
+        cameraTarget={initialCamera?.target ?? defaultCameraTarget}
+        cameraMode={cameraMode}
       />
       <BloomFx />
     </Canvas>

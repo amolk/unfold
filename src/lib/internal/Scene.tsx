@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { OrbitControls } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
-import * as THREE from "three";
 import { ParticleField } from "./ParticleField";
 import { Nodes } from "./Nodes";
 import { EdgePicker } from "./picking/edge-picker";
@@ -60,6 +59,12 @@ interface SceneProps {
    *  a node whose `expandable === true` and id is NOT in expandedNodeIds.
    *  Caller is expected to fetch + append children to `data`. */
   onNodeExpand?: (node: UnfoldNode) => void;
+  /** Initial OrbitControls lookat target. Used once at first mount; user
+   *  orbit/pan thereafter wins. */
+  cameraTarget?: [number, number, number];
+  /** "2d" disables OrbitControls rotation so the orthographic camera stays
+   *  pointed at the chosen plane (pan + zoom still work). */
+  cameraMode?: "2d" | "3d";
 }
 
 export function Scene({
@@ -77,6 +82,8 @@ export function Scene({
   onEdgeClick,
   onEdgeHover,
   onNodeExpand,
+  cameraTarget,
+  cameraMode = "3d",
 }: SceneProps) {
   const stableColor = theme.stableColor;
   const crisisColor = theme.crisisColor;
@@ -86,8 +93,21 @@ export function Scene({
   // for any node missing one (unless layout="none"), and each edge's flow is
   // resolved to concrete colors (falling back to the theme's default edge color).
   const normalized = useMemo(
-    () => normalizeData(data, layout, theme.defaultEdgeColor),
-    [data, layout, theme.defaultEdgeColor],
+    () =>
+      normalizeData(
+        data,
+        layout,
+        theme.defaultEdgeFlow,
+        theme.categories,
+        theme.defaultNodeColor,
+      ),
+    [
+      data,
+      layout,
+      theme.defaultEdgeFlow,
+      theme.categories,
+      theme.defaultNodeColor,
+    ],
   );
 
   // Index the original (public) nodes and edges by id so the picker callbacks
@@ -117,12 +137,9 @@ export function Scene({
     [],
   );
 
-  const stableColor3 = useMemo(() => new THREE.Color(), []);
-  const crisisColor3 = useMemo(() => new THREE.Color(), []);
-  useEffect(() => {
-    stableColor3.set(stableColor);
-    crisisColor3.set(crisisColor);
-  }, [stableColor3, crisisColor3, stableColor, crisisColor]);
+  // Per-node colors are pre-resolved on ProjNode (writeBulgeData reads
+  // them directly), so the stable/crisis-color staging that lived here
+  // is gone with the kind-based color path.
 
   // Bumped when sync reports a topology change, so the projection's `built`
   // bundle is rebuilt. NOT bumped on every fade tick — those write through to
@@ -144,9 +161,19 @@ export function Scene({
   }, [normalized, projection]);
 
   const built = useMemo(
-    () => projection.build(focusId),
-    [projection, activeKey, focusId],
+    () => projection.build(),
+    [projection, activeKey],
   );
+  // Compute focusIndex outside the timeline build so a focus change doesn't
+  // mint a new timeline object — which would re-trigger ParticleField's
+  // useMemos and reset every per-particle attribute. -1 (not 0) when the
+  // focus is null / unknown so the Nodes shader's
+  // `aInstanceEmphasis[i === focusedIndex ? 1 : 0]` test fails for every
+  // node — i.e. no node is emphasized when focus is null.
+  const focusIndex = useMemo(() => {
+    if (!focusId) return -1;
+    return built.nodeIds.indexOf(focusId);
+  }, [built, focusId]);
 
   // Per-instance "is selected?" flag array, parallel to built.timeline.nodes.
   // Recomputed when either the active set or the selection identity changes.
@@ -200,7 +227,7 @@ export function Scene({
   useFrame((_, dt) => {
     const k = 1 - Math.exp(-dt * fadeSpeed);
     projection.tickFades(k);
-    projection.writeBulgeData(focusId, stableColor3, crisisColor3);
+    projection.writeBulgeData(focusId);
   });
 
   // Wire internal index-based callbacks into the public (item, event)
@@ -281,12 +308,10 @@ export function Scene({
       />
       <Nodes
         timeline={built.timeline}
-        focusedIndex={built.focusIndex}
+        focusedIndex={focusIndex}
         selectedFlags={selectedFlags}
         fadeAttribute={projection.nodeFade.attribute}
         sphereOpacity={style.node.opacity}
-        stableColor={stableColor}
-        crisisColor={crisisColor}
         highlightColor={theme.highlight}
         nodeRadius={style.node.baseRadius}
         rimStrength={style.node.rimStrength}
@@ -317,7 +342,7 @@ export function Scene({
       )}
       <OrbitControls
         enablePan
-        enableRotate
+        enableRotate={cameraMode !== "2d"}
         enableZoom
         zoomToCursor
         zoomSpeed={0.8}
@@ -328,8 +353,10 @@ export function Scene({
         // Tilt the lookat above the world origin so the root (at 0,0,0) lands
         // ~20% from the bottom of the viewport on first paint, leaving room
         // above it for branches to grow into. Camera position is unchanged
-        // (Unfold sets it to (9, 1.2, 0)); only the target moves.
-        target={[0, 1.8, 0]}
+        // (Unfold sets it to (9, 1.2, 0)); only the target moves. Caller can
+        // override via `initialCamera.target` for taller graphs that need
+        // the root pushed even further down.
+        target={cameraTarget ?? [0, 1.8, 0]}
         makeDefault
       />
     </>

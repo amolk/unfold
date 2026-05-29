@@ -290,8 +290,10 @@ export function ParticleField({
       const remainder = share - perStream * streamCount;
       // Pick one speed per edge so wisps don't smear (different speeds within
       // a stream would stretch the filament apart). Random spread per-edge
-      // keeps inter-edge motion lively.
-      const edgeSpeed = SPEED_BASE * (0.6 + Math.random() * 0.9);
+      // keeps inter-edge motion lively; `EdgeFlow.speed` (carried as
+      // `speedMultiplier`) is a caller-controlled multiplier on top.
+      const edgeSpeed =
+        SPEED_BASE * (0.6 + Math.random() * 0.9) * edge.speedMultiplier;
       for (let sIdx = 0; sIdx < streamCount; sIdx++) {
         const sid = globalStreamId++;
         // Stream-anchor: where on the tube cross-section this wisp emanates
