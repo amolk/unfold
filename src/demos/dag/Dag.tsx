@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Unfold, type UnfoldLayout } from "../../lib";
-import { buildDag } from "./buildDag";
+import { buildDag } from "../_data/buildDag";
 
 // `buildDag` returns topology only — six bands with 1–3 parents per node
 // drawn from the previous one or two bands. The layout toggle picks how

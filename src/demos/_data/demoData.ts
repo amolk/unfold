@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { UnfoldData, UnfoldEdge, UnfoldNode, Vec3 } from "../../lib";
+import { mulberry32, hashString } from "./rng";
 
 // --- EdgeFlow demo presets ------------------------------------------------
 
@@ -48,28 +49,6 @@ export function applyFlowPreset(
 // here on the demo side — the library knows nothing about how data is
 // produced; it only renders the UnfoldData it's handed. Output uses plain Vec3
 // tuples so the public data never carries a THREE.Vector3.
-
-// --- deterministic PRNG (mulberry32 + FNV-1a), copied from the explorer ---
-
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function hashString(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
 
 const tup = (v: THREE.Vector3): Vec3 => [v.x, v.y, v.z];
 
