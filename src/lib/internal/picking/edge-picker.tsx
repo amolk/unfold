@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { type ThreeEvent } from "@react-three/fiber";
 import * as THREE from "three";
 import { Timeline, sampleBezier } from "../timeline";
+import { useHoverSuppression } from "./useHoverSuppression";
 
 // Invisible "fat tube" raycaster meshes — one per edge — so onClick / onPointerOver
 // can resolve a particle stream to an edge index. The particle <points> field
@@ -86,10 +87,10 @@ export function EdgePicker({
     };
   }, [meshes]);
 
-  // The hovered edge index is held in a ref so leaving one mesh and entering
-  // another reads consistently (R3F's onPointerOut on the leaving mesh fires
-  // BEFORE onPointerOver on the new one within a single frame).
-  const hoveredRef = useRef<number | null>(null);
+  // Shared stale-pointerOut suppression + cursor toggle. These handlers are
+  // only attached to the meshes when onEdgeHover is set (see below), so enter/
+  // leave always have a hover callback to drive.
+  const { enter, leave } = useHoverSuppression<number>(onEdgeHover);
 
   const handleClick = (i: number) => (e: ThreeEvent<MouseEvent>) => {
     if (!onEdgeClick) return;
@@ -97,21 +98,11 @@ export function EdgePicker({
     onEdgeClick(i, e.nativeEvent as PointerEvent);
   };
   const handlePointerOver = (i: number) => (e: ThreeEvent<PointerEvent>) => {
-    if (!onEdgeHover) return;
     e.stopPropagation();
-    hoveredRef.current = i;
-    document.body.style.cursor = "pointer";
-    onEdgeHover(i, e.nativeEvent);
+    enter(i, e.nativeEvent);
   };
   const handlePointerOut = (i: number) => (e: ThreeEvent<PointerEvent>) => {
-    if (!onEdgeHover) return;
-    // Only fire `null` when we're leaving the most-recently-entered edge —
-    // a stale pointerOut from an earlier hover (during fast drags) would
-    // otherwise stomp on a valid concurrent hover.
-    if (hoveredRef.current !== i) return;
-    hoveredRef.current = null;
-    document.body.style.cursor = "";
-    onEdgeHover(null, e.nativeEvent);
+    leave(i, e.nativeEvent);
   };
 
   const hasHandlers = !!onEdgeClick || !!onEdgeHover;

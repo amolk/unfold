@@ -1,10 +1,11 @@
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { OrbitControls } from "@react-three/drei";
 import { ParticleField } from "./ParticleField";
 import { Nodes } from "./Nodes";
 import { EdgePicker } from "./picking/edge-picker";
 import { Affordance } from "./picking/affordance";
 import { useTimelineEngine } from "./use-timeline-engine";
+import { usePickHandlers } from "./picking/usePickHandlers";
 import type { ResolvedStyle, ResolvedTheme } from "./defaults";
 import type {
   NodeId,
@@ -101,21 +102,6 @@ export function Scene({
     nodeBulge,
   } = useTimelineEngine({ data, layout, theme, style, focusId });
 
-  // Index the original (public) nodes and edges by id so the picker callbacks
-  // can echo the caller's exact UnfoldNode / UnfoldEdge objects back. The
-  // build's index→string-id arrays (nodeIds/edgeIds) + these two maps complete
-  // the round trip pickEvent → timeline-index → string-id → public object.
-  const nodeById = useMemo(() => {
-    const m = new Map<string, UnfoldNode>();
-    for (const n of data.nodes) m.set(n.id, n);
-    return m;
-  }, [data]);
-  const edgeById = useMemo(() => {
-    const m = new Map<string, UnfoldEdge>();
-    for (const e of data.edges) m.set(e.id, e);
-    return m;
-  }, [data]);
-
   // Per-instance "is selected?" flag array, parallel to timeline.nodes.
   // Recomputed when either the active set or the selection identity changes.
   // Membership is checked via a Set so a moderately large selectedNodeIds
@@ -125,98 +111,47 @@ export function Scene({
     return nodeIds.map((id) => sel.has(id));
   }, [nodeIds, selectedNodeIds]);
 
-  // Phase 8: compute the list of nodes that should display the
-  // expand-affordance ring — `expandable === true` AND not in
-  // expandedNodeIds. Each entry carries the position (Vec3 tuple) for the
-  // Affordance to render at, and the timeline-index for onAffordanceClick →
-  // onNodeExpand round-tripping.
+  // Phase 8: nodes that should display the expand-affordance ring —
+  // `expandable === true` AND not in expandedNodeIds. Each entry carries the
+  // render position (Vec3 tuple) and the timeline-index the resolver maps back
+  // to a public node for onNodeExpand. The expandable filter needs the public
+  // nodes by id; that lookup is a rendering concern, so it stays local here.
   const affordances = useMemo(() => {
     if (!onNodeExpand) return [];
+    const byId = new Map(data.nodes.map((n) => [n.id, n] as const));
     const expanded = new Set(expandedNodeIds);
     const out: { index: number; position: [number, number, number] }[] = [];
     for (let i = 0; i < nodeIds.length; i++) {
-      const id = nodeIds[i];
-      const node = nodeById.get(id);
-      if (!node?.expandable) continue;
-      if (expanded.has(id)) continue;
+      const node = byId.get(nodeIds[i]);
+      if (!node?.expandable || expanded.has(nodeIds[i])) continue;
       const p = timeline.nodes[i].position;
       out.push({ index: i, position: [p.x, p.y, p.z] });
     }
     return out;
-  }, [nodeIds, timeline, nodeById, expandedNodeIds, onNodeExpand]);
+  }, [nodeIds, timeline, data, expandedNodeIds, onNodeExpand]);
 
   const affordancePositions = useMemo(
     () => affordances.map((a) => a.position),
     [affordances],
   );
 
-  const wiredAffordanceClick = useCallback(
-    (idx: number, _event: PointerEvent) => {
-      if (!onNodeExpand) return;
-      const a = affordances[idx];
-      if (!a) return;
-      const id = nodeIds[a.index];
-      const node = id != null ? nodeById.get(id) : undefined;
-      if (node) onNodeExpand(node);
-    },
-    [affordances, nodeIds, nodeById, onNodeExpand],
-  );
-
-  // Wire internal index-based callbacks into the public (item, event)
-  // signatures. The translation index → nodeIds[i] → nodeById is the exact
-  // round trip described above. Wrapped in useCallback so Nodes / EdgePicker
-  // don't see a new function on every render and re-bind handlers.
-  const wiredNodeClick = useCallback(
-    (idx: number, event: PointerEvent) => {
-      const id = nodeIds[idx];
-      if (id == null) return;
-      // Library default: clicking a node moves focus to it. In uncontrolled
-      // mode this updates the internal focus state; in controlled mode it
-      // just fires onFocusChange so the caller can choose to honor it. This
-      // is the explicit "uncontrolled-mode auto-focus on click" behavior
-      // the design doc describes, and matches the prototype's "click = look
-      // at this node" UX.
-      onSetFocus(id);
-      const node = nodeById.get(id);
-      if (node && onNodeClick) onNodeClick(node, event);
-    },
-    [nodeIds, nodeById, onSetFocus, onNodeClick],
-  );
-  const wiredNodeHover = useCallback(
-    (idx: number | null, event: PointerEvent) => {
-      if (!onNodeHover) return;
-      if (idx == null) {
-        onNodeHover(null, event);
-        return;
-      }
-      const id = nodeIds[idx];
-      const node = id != null ? nodeById.get(id) : undefined;
-      if (node) onNodeHover(node, event);
-    },
-    [onNodeHover, nodeIds, nodeById],
-  );
-  const wiredEdgeClick = useCallback(
-    (idx: number, event: PointerEvent) => {
-      if (!onEdgeClick) return;
-      const id = edgeIds[idx];
-      const edge = id != null ? edgeById.get(id) : undefined;
-      if (edge) onEdgeClick(edge, event);
-    },
-    [onEdgeClick, edgeIds, edgeById],
-  );
-  const wiredEdgeHover = useCallback(
-    (idx: number | null, event: PointerEvent) => {
-      if (!onEdgeHover) return;
-      if (idx == null) {
-        onEdgeHover(null, event);
-        return;
-      }
-      const id = edgeIds[idx];
-      const edge = id != null ? edgeById.get(id) : undefined;
-      if (edge) onEdgeHover(edge, event);
-    },
-    [onEdgeHover, edgeIds, edgeById],
-  );
+  // Translate the pickers' index-based events into the public (item, event)
+  // callbacks. The hook's pure resolver owns the index → id → object round
+  // trip + the affordance double-indirection; the focus-on-click default and
+  // optional-callback gating live in the hook. nodeClick is always wired (the
+  // focus default fires even with no caller-supplied onNodeClick).
+  const pick = usePickHandlers({
+    data,
+    nodeIds,
+    edgeIds,
+    affordances,
+    onSetFocus,
+    onNodeClick,
+    onNodeHover,
+    onEdgeClick,
+    onEdgeHover,
+    onNodeExpand,
+  });
 
   return (
     <>
@@ -250,13 +185,13 @@ export function Scene({
         // Click is always wired now — even without a caller-supplied
         // onNodeClick the library auto-focuses on node-click in
         // uncontrolled mode. Hover is gated on the public hover callback.
-        onNodeClick={wiredNodeClick}
-        onNodeHover={onNodeHover ? wiredNodeHover : undefined}
+        onNodeClick={pick.nodeClick}
+        onNodeHover={pick.nodeHover}
       />
       <EdgePicker
         timeline={timeline}
-        onEdgeClick={onEdgeClick ? wiredEdgeClick : undefined}
-        onEdgeHover={onEdgeHover ? wiredEdgeHover : undefined}
+        onEdgeClick={pick.edgeClick}
+        onEdgeHover={pick.edgeHover}
       />
       {/* Phase 8: expand-affordance ring around any expandable+unexpanded
           node. Rendered only when onNodeExpand is wired (no point showing
@@ -269,7 +204,7 @@ export function Scene({
           color={theme.highlight}
           innerRadius={style.node.baseRadius * 1.4}
           outerRadius={style.node.baseRadius * 1.7}
-          onAffordanceClick={wiredAffordanceClick}
+          onAffordanceClick={pick.affordanceClick}
         />
       )}
       <OrbitControls

@@ -5,6 +5,7 @@ import { Timeline } from "./timeline";
 import { nodesVert } from "./nodes.vert.glsl";
 import { nodesFrag } from "./nodes.frag.glsl";
 import { DEFAULT_SCENE } from "./defaults";
+import { useHoverSuppression } from "./picking/useHoverSuppression";
 
 interface NodesProps {
   timeline: Timeline;
@@ -155,9 +156,8 @@ export function Nodes({
     u.uHighlightColor.value.set(highlightColor);
   }, [rimStrength, sphereOpacity, highlightColor]);
 
-  // The most-recently-entered instance index, used to suppress stale
-  // pointerOut events from an instance the cursor already moved off of.
-  const hoveredRef = useRef<number | null>(null);
+  // Shared stale-pointerOut suppression + cursor toggle (see useHoverSuppression).
+  const { enter, leave } = useHoverSuppression<number>(onNodeHover);
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     if (e.instanceId == null || !onNodeClick) return;
@@ -167,16 +167,11 @@ export function Nodes({
   const handlePointerOver = (e: ThreeEvent<PointerEvent>) => {
     if (e.instanceId == null) return;
     e.stopPropagation();
-    hoveredRef.current = e.instanceId;
-    document.body.style.cursor = "pointer";
-    onNodeHover?.(e.instanceId, e.nativeEvent);
+    enter(e.instanceId, e.nativeEvent);
   };
   const handlePointerOut = (e: ThreeEvent<PointerEvent>) => {
     if (e.instanceId == null) return;
-    if (hoveredRef.current !== e.instanceId) return;
-    hoveredRef.current = null;
-    document.body.style.cursor = "";
-    onNodeHover?.(null, e.nativeEvent);
+    leave(e.instanceId, e.nativeEvent);
   };
 
   const hasHandlers = !!onNodeClick || !!onNodeHover;
