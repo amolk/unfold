@@ -4,6 +4,7 @@ import {
   type UnfoldStyle,
   type UnfoldTheme,
 } from "../../lib";
+import { DemoGrid } from "../../demo-shell";
 
 // Six ways to color and shape nodes, all rendering the same topology.
 //
@@ -92,50 +93,15 @@ const presets: Preset[] = [
 
 export function NodeStyle() {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr 1fr",
-        gridTemplateRows: "1fr 1fr",
-        width: "100%",
-        height: "100%",
-        gap: 1,
-      }}
-    >
-      {presets.map(({ label, style, theme, selected }) => (
-        <Pane key={label} label={label}>
-          <Unfold
-            data={data}
-            style={style}
-            theme={theme}
-            selectedNodeIds={selected}
-          />
-        </Pane>
-      ))}
-    </div>
-  );
-}
-
-function Pane({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      {children}
-      <div
-        style={{
-          position: "absolute",
-          top: 8,
-          left: 10,
-          color: "#d8d0c8",
-          fontFamily: "ui-monospace, monospace",
-          fontSize: 11,
-          background: "rgba(20, 10, 14, 0.75)",
-          padding: "3px 7px",
-          borderRadius: 3,
-          pointerEvents: "none",
-        }}
-      >
-        {label}
-      </div>
-    </div>
+    <DemoGrid
+      cols={3}
+      rows={2}
+      panes={presets.map(({ label, style, theme, selected }) => ({
+        label,
+        children: (
+          <Unfold data={data} style={style} theme={theme} selectedNodeIds={selected} />
+        ),
+      }))}
+    />
   );
 }

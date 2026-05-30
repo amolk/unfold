@@ -1,146 +1,68 @@
 import { useState } from "react";
-import { Unfold, type NodeId, type UnfoldData } from "../../lib";
+import { Unfold, type UnfoldData, type NodeId } from "../../lib";
+import { ControlPanel, Segmented, Button, tokens } from "../../demo-shell";
 
-// `focusedNodeId` and `selectedNodeIds` are each independently
-// controlled-or-uncontrolled. Pass them and the library never mutates;
-// omit them and it manages an internal slot. The `onFocusChange` /
-// `onSelectionChange` callbacks fire either way — they're observation, not
-// the source of truth.
-//
-// Here both are controlled: the buttons set state directly, and the
-// callbacks just keep our state in sync when the user clicks a node in
-// the scene.
-
+// Demonstrates controlled focus + selection: the parent owns the state and
+// passes it down, with buttons that mutate it externally.
 const data: UnfoldData = {
   nodes: [
-    { id: "root", label: "root" },
-    { id: "a", label: "a" },
-    { id: "b", label: "b" },
-    { id: "c", label: "c" },
-    { id: "d", label: "d" },
+    { id: "root" },
+    { id: "a" },
+    { id: "b" },
+    { id: "c" },
+    { id: "a1" },
+    { id: "a2" },
   ],
   edges: [
     { id: "e1", source: "root", target: "a" },
     { id: "e2", source: "root", target: "b" },
-    { id: "e3", source: "a", target: "c" },
-    { id: "e4", source: "b", target: "d" },
+    { id: "e3", source: "root", target: "c" },
+    { id: "e4", source: "a", target: "a1" },
+    { id: "e5", source: "a", target: "a2" },
   ],
 };
 
-const NODE_IDS: NodeId[] = data.nodes.map((n) => n.id);
+const NODE_IDS: NodeId[] = ["root", "a", "b", "c", "a1", "a2"];
 
 export function Controlled() {
-  const [focused, setFocused] = useState<NodeId | null>("root");
-  const [selected, setSelected] = useState<NodeId[]>([]);
-
-  const toggle = (id: NodeId) =>
-    setSelected((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
+  const [focus, setFocus] = useState<NodeId | null>("root");
+  const [selected, setSelected] = useState<readonly NodeId[]>(["a", "a1"]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <Unfold
         data={data}
-        focusedNodeId={focused}
+        focusedNodeId={focus}
         selectedNodeIds={selected}
-        onFocusChange={setFocused}
+        onFocusChange={setFocus}
         onSelectionChange={setSelected}
-        onNodeClick={(node) => toggle(node.id)}
       />
-      <Panel>
-        <Row label="focused">{focused ?? "—"}</Row>
-        <Row label="selected">
-          {selected.length === 0 ? "—" : selected.join(", ")}
-        </Row>
-        <div style={{ marginTop: 10 }}>
-          <div style={btnRowLabel}>focus</div>
-          <div style={btnRow}>
-            {NODE_IDS.map((id) => (
-              <button
-                key={id}
-                onClick={() => setFocused(id)}
-                style={focused === id ? btnActive : btn}
-              >
-                {id}
-              </button>
-            ))}
-            <button onClick={() => setFocused(null)} style={btn}>
-              clear
-            </button>
-          </div>
-          <div style={{ ...btnRowLabel, marginTop: 8 }}>select</div>
-          <div style={btnRow}>
-            <button onClick={() => setSelected(NODE_IDS)} style={btn}>
-              all
-            </button>
-            <button onClick={() => setSelected([])} style={btn}>
-              none
-            </button>
-          </div>
+      <ControlPanel>
+        {/* focus is mutually-exclusive → Segmented */}
+        <Segmented
+          label="focus"
+          options={NODE_IDS}
+          value={focus ?? ("" as NodeId)}
+          onChange={setFocus}
+        />
+        {/* selection is multi-toggle → independent Buttons */}
+        <div style={{ color: tokens.inkDim, marginBottom: 4 }}>selected (toggle)</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+          {NODE_IDS.map((id) => (
+            <Button
+              key={id}
+              active={selected.includes(id)}
+              onClick={() =>
+                setSelected((s) =>
+                  s.includes(id) ? s.filter((x) => x !== id) : [...s, id],
+                )
+              }
+            >
+              {id}
+            </Button>
+          ))}
         </div>
-      </Panel>
+      </ControlPanel>
     </div>
   );
 }
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 6 }}>
-      <div style={{ color: "#a89890", marginBottom: 2 }}>{label}</div>
-      <div style={{ wordBreak: "break-word" }}>{children}</div>
-    </div>
-  );
-}
-
-function Panel({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        right: 12,
-        top: 12,
-        width: 240,
-        padding: "10px 12px",
-        background: "rgba(20, 10, 14, 0.9)",
-        border: "1px solid #3a2030",
-        borderRadius: 4,
-        color: "#d8d0c8",
-        fontFamily: "ui-monospace, monospace",
-        fontSize: 11,
-        lineHeight: 1.4,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-const btn: React.CSSProperties = {
-  padding: "3px 8px",
-  background: "transparent",
-  color: "#d8d0c8",
-  border: "1px solid #3a2030",
-  borderRadius: 3,
-  fontFamily: "inherit",
-  fontSize: 11,
-  cursor: "pointer",
-};
-
-const btnActive: React.CSSProperties = {
-  ...btn,
-  background: "rgba(255, 176, 96, 0.18)",
-  borderColor: "#ffb060",
-  color: "#ffd8a0",
-};
-
-const btnRow: React.CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 4,
-};
-
-const btnRowLabel: React.CSSProperties = {
-  color: "#a89890",
-  marginBottom: 4,
-};

@@ -1,4 +1,5 @@
 import { Unfold, type UnfoldData, type UnfoldStyle } from "../../lib";
+import { DemoGrid } from "../../demo-shell";
 
 // `UnfoldStyle.edge` is the global look-and-feel surface for every edge's
 // particle stream. Same data + same flow, four very different looks.

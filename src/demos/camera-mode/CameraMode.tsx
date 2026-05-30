@@ -1,4 +1,5 @@
 import { Unfold, type UnfoldData } from "../../lib";
+import { DemoGrid } from "../../demo-shell";
 
 // `cameraMode="2d"` swaps the perspective camera for an orthographic one
 // (no depth foreshortening) and locks OrbitControls rotation — pan and
