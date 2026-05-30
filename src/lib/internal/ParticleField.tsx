@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
-import { Timeline, sampleBezier } from "./timeline";
+import { Timeline } from "./timeline";
 import { particlesVert } from "./particles.vert.glsl";
 import { particlesFrag } from "./particles.frag.glsl";
 import type { NodeBulgeData } from "./scene-projection";
+import {
+  buildParticleAttributes,
+  buildCurveTexture,
+  buildEdgeColorTexture,
+  toDataTexture,
+} from "./particle-core";
 import { useZoomDrivenControl } from "./useZoomDrivenControl";
 import { useOrbitControls } from "./useOrbitControls";
 
@@ -187,159 +193,48 @@ export function ParticleField({
   );
 
   // --- bake curves into a DataTexture (rows = curves, cols = samples) ---
-  const curveTexture = useMemo(() => {
-    const w = samplesPerCurve;
-    const h = timeline.edges.length;
-    const data = new Float32Array(w * h * 4);
-    const tmp = new THREE.Vector3();
-    for (let row = 0; row < h; row++) {
-      const edge = timeline.edges[row];
-      for (let col = 0; col < w; col++) {
-        const t = col / (w - 1);
-        sampleBezier(edge.controls, t, tmp);
-        const i = (row * w + col) * 4;
-        data[i + 0] = tmp.x;
-        data[i + 1] = tmp.y;
-        data[i + 2] = tmp.z;
-        data[i + 3] = 1.0;
-      }
-    }
-    const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
-    tex.minFilter = THREE.NearestFilter;
-    tex.magFilter = THREE.NearestFilter;
-    tex.wrapS = THREE.ClampToEdgeWrapping;
-    tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.needsUpdate = true;
-    return tex;
-  }, [timeline, samplesPerCurve]);
+  const curveTexture = useMemo(
+    () => toDataTexture(buildCurveTexture(timeline, samplesPerCurve)),
+    [timeline, samplesPerCurve],
+  );
 
   // --- bake the EdgeFlow palette into an 8×(edge count) RGBA texture ---
   // Row = edge (matches the curve texture row / aCurveIndex), column = color
   // slot 0..7. Empty slots repeat color 0 so an over-index reads a valid color.
-  const edgeColorTexture = useMemo(() => {
-    const h = Math.max(1, timeline.edges.length);
-    const data = new Float32Array(8 * h * 4);
-    const c = new THREE.Color();
-    for (let row = 0; row < timeline.edges.length; row++) {
-      const cols = timeline.edges[row].colors;
-      for (let s = 0; s < 8; s++) {
-        c.set(cols[s] ?? cols[0] ?? "#ffffff");
-        const i = (row * 8 + s) * 4;
-        data[i + 0] = c.r;
-        data[i + 1] = c.g;
-        data[i + 2] = c.b;
-        data[i + 3] = 1.0;
-      }
-    }
-    const tex = new THREE.DataTexture(data, 8, h, THREE.RGBAFormat, THREE.FloatType);
-    tex.minFilter = THREE.NearestFilter;
-    tex.magFilter = THREE.NearestFilter;
-    tex.wrapS = THREE.ClampToEdgeWrapping;
-    tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.needsUpdate = true;
-    return tex;
-  }, [timeline]);
+  const edgeColorTexture = useMemo(
+    () => toDataTexture(buildEdgeColorTexture(timeline)),
+    [timeline],
+  );
 
   // --- per-particle attribute buffers, distributed by edge weight ---
   // Total count scales linearly with the visible edge count so a small tree
   // and a complex tree end up at the same per-segment density.
   const particleCount = Math.max(1, particlesPerEdge * timeline.edges.length);
   const geometry = useMemo(() => {
-    const totalWeight = timeline.edges.reduce((s, e) => s + e.weight, 0);
-    const positions = new Float32Array(particleCount * 3); // dummy (shader overrides)
-    const curveIndex = new Float32Array(particleCount);
-    const phase = new Float32Array(particleCount);
-    const speed = new Float32Array(particleCount);
-    const seed = new Float32Array(particleCount);
-    // EdgeFlow color slot (0..7) per particle. Drawn from each edge's
-    // proportions so the declared color mix appears at the requested ratio.
-    const colorIndex = new Float32Array(particleCount);
-    // Per-stream values: all particles assigned to the same stream share these
-    // so they emerge from a consistent point on the curve's cross-section.
-    const radialAngle = new Float32Array(particleCount);
-    const radialRadius = new Float32Array(particleCount);
-    const streamId = new Float32Array(particleCount);
-
-    // Constant base particle speed across all edges. Pre-EdgeFlow the
-    // projection carried a kind concept ("crisis" edges ran slightly slower
-    // at 0.045 vs 0.06) but that's dead now; one speed for everyone.
-    const SPEED_BASE = 0.06;
-
-    // Streams are global (not per-edge) so noise sampling is distinct between
-    // edges. We accumulate a global counter as we lay out edges.
-    let globalStreamId = 0;
-    let p = 0;
-    timeline.edges.forEach((edge, idx) => {
-      const share = Math.round((edge.weight / totalWeight) * particleCount);
-      // Cap streams at the share — empty streams would just waste id-space.
-      const streamCount = Math.max(1, Math.min(streamsPerEdge, share));
-      // Normalized cumulative distribution over this edge's flow proportions,
-      // capped at the 8 palette slots. pickColor() draws a slot per particle.
-      const props = edge.proportions.slice(0, 8);
-      const propTotal = props.reduce((s, x) => s + x, 0) || 1;
-      let acc = 0;
-      const cum = props.map((x) => (acc += x / propTotal));
-      const pickColor = () => {
-        const r = Math.random();
-        for (let i = 0; i < cum.length; i++) if (r <= cum[i]) return i;
-        return cum.length - 1;
-      };
-      // Distribute the edge's particle share evenly across streams, with the
-      // remainder spilled into the first few streams.
-      const perStream = Math.floor(share / streamCount);
-      const remainder = share - perStream * streamCount;
-      // Pick one speed per edge so wisps don't smear (different speeds within
-      // a stream would stretch the filament apart). Random spread per-edge
-      // keeps inter-edge motion lively; `EdgeFlow.speed` (carried as
-      // `speedMultiplier`) is a caller-controlled multiplier on top.
-      const edgeSpeed =
-        SPEED_BASE * (0.6 + Math.random() * 0.9) * edge.speedMultiplier;
-      for (let sIdx = 0; sIdx < streamCount; sIdx++) {
-        const sid = globalStreamId++;
-        // Stream-anchor: where on the tube cross-section this wisp emanates
-        // from. Shared by every particle in the stream so they start aligned.
-        const sAngle = Math.random() * Math.PI * 2;
-        const sRadius = Math.sqrt(Math.random());
-        const count = perStream + (sIdx < remainder ? 1 : 0);
-        for (let k = 0; k < count && p < particleCount; k++, p++) {
-          curveIndex[p] = idx;
-          // Phases evenly staggered + slight jitter — staggered so the wisp
-          // is continuously populated, jittered so it doesn't beat in lockstep.
-          phase[p] = (k / Math.max(1, count) + Math.random() * 0.03) % 1;
-          speed[p] = edgeSpeed;
-          seed[p] = Math.random() * 1000;
-          colorIndex[p] = pickColor();
-          radialAngle[p] = sAngle;
-          radialRadius[p] = sRadius;
-          streamId[p] = sid;
-        }
-      }
-    });
-    while (p < particleCount) {
-      curveIndex[p] = 0;
-      phase[p] = Math.random();
-      speed[p] = SPEED_BASE;
-      seed[p] = Math.random() * 1000;
-      colorIndex[p] = 0;
-      radialAngle[p] = Math.random() * Math.PI * 2;
-      radialRadius[p] = Math.sqrt(Math.random());
-      streamId[p] = globalStreamId;
-      p++;
-    }
-
+    // The weighted per-particle distribution now lives in particle-core
+    // (pure + seedable). rng is omitted → Math.random, identical to before.
+    const a = buildParticleAttributes(timeline, { particleCount, streamsPerEdge });
     const geom = new THREE.BufferGeometry();
-    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geom.setAttribute("aCurveIndex", new THREE.BufferAttribute(curveIndex, 1));
-    geom.setAttribute("aPhase", new THREE.BufferAttribute(phase, 1));
-    geom.setAttribute("aSpeed", new THREE.BufferAttribute(speed, 1));
-    geom.setAttribute("aSeed", new THREE.BufferAttribute(seed, 1));
-    geom.setAttribute("aColorIndex", new THREE.BufferAttribute(colorIndex, 1));
-    geom.setAttribute("aRadialAngle", new THREE.BufferAttribute(radialAngle, 1));
-    geom.setAttribute("aRadialRadius", new THREE.BufferAttribute(radialRadius, 1));
-    geom.setAttribute("aStreamId", new THREE.BufferAttribute(streamId, 1));
+    geom.setAttribute("position", new THREE.BufferAttribute(a.position, 3));
+    geom.setAttribute("aCurveIndex", new THREE.BufferAttribute(a.curveIndex, 1));
+    geom.setAttribute("aPhase", new THREE.BufferAttribute(a.phase, 1));
+    geom.setAttribute("aSpeed", new THREE.BufferAttribute(a.speed, 1));
+    geom.setAttribute("aSeed", new THREE.BufferAttribute(a.seed, 1));
+    geom.setAttribute("aColorIndex", new THREE.BufferAttribute(a.colorIndex, 1));
+    geom.setAttribute("aRadialAngle", new THREE.BufferAttribute(a.radialAngle, 1));
+    geom.setAttribute("aRadialRadius", new THREE.BufferAttribute(a.radialRadius, 1));
+    geom.setAttribute("aStreamId", new THREE.BufferAttribute(a.streamId, 1));
     geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 100);
     return geom;
   }, [timeline, particleCount, streamsPerEdge]);
+
+  // Dispose the previous geometry / curve / edge-color GPU resources when they
+  // are rebuilt (on timeline change) or on unmount. These are created per
+  // timeline and passed by prop, so R3F does not auto-dispose them — without
+  // this they leak steadily as the active set changes.
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  useEffect(() => () => curveTexture.dispose(), [curveTexture]);
+  useEffect(() => () => edgeColorTexture.dispose(), [edgeColorTexture]);
 
   // Repoint the bulge texture uniforms whenever the textures themselves are
   // recreated (rare — only on hot-reload or component remount).
