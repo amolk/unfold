@@ -11,6 +11,7 @@ import {
   buildEdgeColorTexture,
   toDataTexture,
 } from "./particle-core";
+import { createParticleUniforms } from "./particle-uniforms";
 import { useZoomDrivenControl } from "./useZoomDrivenControl";
 import { useOrbitControls } from "./useOrbitControls";
 
@@ -103,91 +104,14 @@ export function ParticleField({
     zoomT, initialAnchor: 4.65, target: 0, ease: "linear",
   });
 
-  // Build the uniforms object once per material lifetime and mutate values in
-  // place. Rebuilding it on timeline changes would reset uTime (visibly
-  // freezing animation) and force three.js to rebind every uniform, so we
-  // keep the references stable and patch values via the effects below.
-  //
-  // The values below are the live defaults — they're the only source of truth
-  // now that the Leva panels are gone (Phase 3 promotes a subset of them to
-  // `style.edge.*` props). Anything not yet re-exposed sits at its previous
-  // panel default here.
+  // Build the uniforms once per material lifetime and mutate values in place;
+  // the effects/frame loop below patch the style.edge.* + zoom subset. The
+  // ~60-uniform bag lives in particle-uniforms.ts, organized into named
+  // semantic groups (the flattened result is identical to the old inline
+  // object — see particle-uniforms.test.ts). Built empty-deps so it isn't
+  // rebuilt on render (that would reset uTime and force a full rebind).
   const uniforms = useMemo(
-    () => ({
-      uTime: { value: 0 },
-      uCurves: { value: null as THREE.DataTexture | null },
-      uEdgeColors: { value: null as THREE.DataTexture | null },
-      uEdgeFades: { value: null as THREE.DataTexture | null },
-      uEdgeFadeTexHeight: { value: 1 },
-      uCurveTexWidth: { value: 1 },
-      uCurveTexHeight: { value: 1 },
-      uPointSize: { value: 1 },
-      uTubeRadius: { value: 0 },
-      uWispAmp: { value: 0.15 },
-      uWispStretch: { value: 0.7 },
-      uWispMorphSpeed: { value: 0.15 },
-      uEdgeFlowSpread: { value: 0 },
-      uStreamPerturb: { value: 0.96 },
-      uGustAmp: { value: 0 },
-      uGustSpeed: { value: 0 },
-      uWispOctave: { value: 0.08 },
-      uPinHead: { value: 0 },
-      uPinTail: { value: 0 },
-      uTailBloom: { value: 0 },
-      uNodeVolume: { value: 0.07 },
-      uBunchFreq: { value: 0 },
-      uBunchContrast: { value: 0 },
-      uBunchTime: { value: 0 },
-      uBurstEnable: { value: 0 },
-      uBurstRate: { value: 60 },
-      uStreakAmp: { value: 0.6 },
-      uMinPointSize: { value: 1 },
-      uSpeedScale: { value: 0.32 },
-      uIntensity: { value: 0.1 },
-      uResolution: { value: new THREE.Vector2(1, 1) },
-      uStableColor: { value: new THREE.Color() },
-      uCrisisColor: { value: new THREE.Color() },
-      uShimmerSpikeFreq: { value: 1.1 },
-      uShimmerSpikeAmp: { value: 0 },
-      uShimmerSharpness: { value: 34.5 },
-      uShimmerSlowFreq: { value: 0.2 },
-      uShimmerSlowAmp: { value: 0.1 },
-      uShimmerDepth: { value: 1.0 },
-      // Bulge: data textures + count. Backing Float32Arrays are wrapped by
-      // DataTextures owned by the parent and mutated each frame; we point the
-      // sampler uniforms at the textures. Going through textures (rather than
-      // uniform arrays) avoids MAX_VERTEX_UNIFORM_VECTORS limits on the GPU,
-      // so we can scale to thousands of nodes.
-      uNodeCount: { value: 0 },
-      uNodePosFadeTex: { value: nodeBulge.posFade.texture },
-      uNodeColorEmphTex: { value: nodeBulge.colorEmph.texture },
-      uNodeTexHeight: { value: nodeBulge.texHeight },
-      uNodeRadius: { value: 0.13 },
-      uNodeEmphRadius: { value: 0.14 },
-      uNodeBulgeSize: { value: 0 },
-      uNodeColorMix: { value: 0 },
-      uNodeBoost: { value: 0 },
-      uNodeDriftBoost: { value: 0 },
-      uNodeSwirlStrength: { value: 0 },
-      uNodeSwirlSpeed: { value: 0 },
-      uNodeGravity: { value: 0 },
-      uNodeCenterGravity: { value: -0.22 },
-      uNodeCoreStrength: { value: 0 },
-      // Wind triple default (0.6, 0.1, 0) — was applied by the Leva mirror
-      // effect, now baked in since the panel is gone.
-      uWindDir: { value: new THREE.Vector3(0.6, 0.1, 0) },
-      uWindStrength: { value: 0.04 },
-      uWindSpeed: { value: 0.3 },
-      uGlintRatio: { value: 0.03 },
-      uGlintSizeMult: { value: 4 },
-      uGlintIntensity: { value: 1 },
-      uGrainCore: { value: 80 },
-      uGrainHalo: { value: 8.7 },
-      uGrainHaloAmp: { value: 0 },
-    }),
-    // The bulge arrays only change identity when Scene rebuilds them; otherwise
-    // we just mutate in place. We don't list nodeBulge here because creating
-    // new uniform objects on every render would re-bind every frame.
+    () => createParticleUniforms(nodeBulge),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
