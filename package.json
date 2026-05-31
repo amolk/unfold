@@ -1,30 +1,78 @@
 {
-  "name": "unfold",
-  "private": true,
-  "version": "0.0.1",
+  "name": "unfold-graph",
+  "version": "0.1.0",
+  "description": "Interactive 3D graph/tree visualization for React — nodes and edges rendered as a glowing particle field with React Three Fiber and custom GLSL shaders.",
   "type": "module",
+  "license": "MIT",
+  "author": "Amol Kelkar <kelkar.amol@gmail.com>",
+  "homepage": "https://amolk.github.io/unfold/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amolk/unfold.git"
+  },
+  "bugs": {
+    "url": "https://github.com/amolk/unfold/issues"
+  },
+  "keywords": [
+    "react",
+    "three",
+    "three.js",
+    "react-three-fiber",
+    "r3f",
+    "graph",
+    "tree",
+    "visualization",
+    "graph-visualization",
+    "dataviz",
+    "webgl",
+    "particles",
+    "3d"
+  ],
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:lib": "tsc -b && vite build --config vite.lib.config.ts",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run test && npm run build:lib"
   },
-  "dependencies": {
+  "peerDependencies": {
+    "@react-three/drei": ">=9.0.0",
+    "@react-three/fiber": ">=8.0.0",
+    "@react-three/postprocessing": ">=2.0.0",
+    "postprocessing": ">=6.0.0",
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0",
+    "three": ">=0.160.0"
+  },
+  "devDependencies": {
     "@react-three/drei": "^9.114.0",
     "@react-three/fiber": "^8.17.10",
     "@react-three/postprocessing": "^2.16.3",
-    "leva": "^0.10.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "three": "^0.169.0"
-  },
-  "devDependencies": {
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/three": "^0.169.0",
     "@vitejs/plugin-react": "^4.3.3",
+    "postprocessing": "^6.39.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.169.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
+    "vite-plugin-dts": "^4.5.4",
     "vitest": "^2.1.9"
   }
 }
