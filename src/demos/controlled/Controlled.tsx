@@ -26,7 +26,7 @@ const NODE_IDS: NodeId[] = ["root", "a", "b", "c", "a1", "a2"];
 
 export function Controlled() {
   const [focus, setFocus] = useState<NodeId | null>("root");
-  const [selected, setSelected] = useState<readonly NodeId[]>(["a", "a1"]);
+  const [selected, setSelected] = useState<NodeId[]>(["a", "a1"]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>

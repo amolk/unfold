@@ -192,6 +192,9 @@ export function Scene({
         timeline={timeline}
         onEdgeClick={pick.edgeClick}
         onEdgeHover={pick.edgeHover}
+        // Clip the pick tubes back to the node surface so clicks on a node
+        // land on the sphere, not the edge tube running through its center.
+        endTrim={style.node.baseRadius}
       />
       {/* Phase 8: expand-affordance ring around any expandable+unexpanded
           node. Rendered only when onNodeExpand is wired (no point showing

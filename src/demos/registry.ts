@@ -21,7 +21,7 @@ import { Expansion } from "./expansion/Expansion";
 import expansionSource from "./expansion/Expansion.tsx?raw";
 import { SizesWeights } from "./sizes-weights/SizesWeights";
 import sizesWeightsSource from "./sizes-weights/SizesWeights.tsx?raw";
-import { Tree } from "./deep-tree/DeepTree";
+import { DeepTree } from "./deep-tree/DeepTree";
 import deepTreeSource from "./deep-tree/DeepTree.tsx?raw";
 import { Dag } from "./dag/Dag";
 import dagSource from "./dag/Dag.tsx?raw";
@@ -67,7 +67,7 @@ export const demos: Demo[] = [
     blurb:
       "Procedurally-generated tree topology (~100 nodes) run through the library's layout system. " +
       "Toggle between the 3D conical-fan `layered` layout and the flat sunburst `radial` layout. Reseed for a new topology.",
-    Component: Tree,
+    Component: DeepTree,
     source: rewriteForDisplay(deepTreeSource),
     sourcePath: "src/demos/deep-tree/DeepTree.tsx",
   },

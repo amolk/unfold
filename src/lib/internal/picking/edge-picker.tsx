@@ -30,8 +30,17 @@ interface EdgePickerProps {
   /** World-units radius of the invisible "fat tube" hit region. Looser =
    *  easier to hit; tighter = less likely to swallow background clicks. */
   pickRadius?: number;
+  /** World-units to clip off each end of the tube so it stops at the node
+   *  surface instead of running through the node center. Edge curves are
+   *  anchored node-center to node-center, so an untrimmed tube overlaps both
+   *  endpoint spheres and steals clicks meant for the node (the particle
+   *  streams flow right over it). Default tracks the node sphere radius. */
+  endTrim?: number;
 }
 
+// A bezier curve restricted to the parametric sub-range [tStart, tEnd]. The
+// [0,1] domain TubeGeometry samples is remapped into that window, so the tube
+// covers only the trimmed span — clipping the ends away from the nodes.
 class BezierCurve3 extends THREE.Curve<THREE.Vector3> {
   constructor(
     private readonly controls: [
@@ -40,10 +49,13 @@ class BezierCurve3 extends THREE.Curve<THREE.Vector3> {
       THREE.Vector3,
       THREE.Vector3,
     ],
+    private readonly tStart = 0,
+    private readonly tEnd = 1,
   ) {
     super();
   }
-  getPoint(t: number, optionalTarget = new THREE.Vector3()): THREE.Vector3 {
+  getPoint(s: number, optionalTarget = new THREE.Vector3()): THREE.Vector3 {
+    const t = this.tStart + s * (this.tEnd - this.tStart);
     return sampleBezier(this.controls, t, optionalTarget);
   }
 }
@@ -55,6 +67,7 @@ export function EdgePicker({
   tubularSegments = 24,
   radialSegments = 5,
   pickRadius = 0.18,
+  endTrim = 0.2,
 }: EdgePickerProps) {
   // Build a TubeGeometry per edge, with the edge's timeline-index baked into
   // each mesh's userData so the click handler can resolve it without an
@@ -63,7 +76,20 @@ export function EdgePicker({
   // R3F disposes on unmount.
   const meshes = useMemo(() => {
     return timeline.edges.map((edge, i) => {
-      const curve = new BezierCurve3(edge.controls);
+      // Convert the world-units endTrim into a parametric margin per end via
+      // the curve's arc-length mapping, then build the tube over the clipped
+      // [t0, t1] window. Cap the margin at 0.4 per end so short edges keep a
+      // pickable middle (≥20% of the span) rather than collapsing to nothing.
+      const full = new BezierCurve3(edge.controls);
+      const length = full.getLength();
+      const margin = length > 1e-6 ? Math.min(endTrim / length, 0.4) : 0;
+      // Second arg (distance) is 0 → falsy, so three.js maps from the u
+      // fraction; @types/three just marks the param required.
+      const curve = new BezierCurve3(
+        edge.controls,
+        full.getUtoTmapping(margin, 0),
+        full.getUtoTmapping(1 - margin, 0),
+      );
       const geom = new THREE.TubeGeometry(
         curve,
         tubularSegments,
@@ -73,7 +99,7 @@ export function EdgePicker({
       );
       return { index: i, geom };
     });
-  }, [timeline, tubularSegments, radialSegments, pickRadius]);
+  }, [timeline, tubularSegments, radialSegments, pickRadius, endTrim]);
 
   // Dispose all the geometries when the active set changes (we re-create on
   // the next render). Without this, every topology change leaks the previous
