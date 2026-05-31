@@ -63,6 +63,8 @@ export const DEFAULT_EDGE = {
   shimmer: 0.1,
   glintRatio: 0.03,
   glintIntensity: 1,
+  selectedBrightness: 2,
+  selectedSizeMultiplier: 1.7,
 } as const;
 
 /** Bloom post-processing — formerly the "Bloom" Leva panel in App.tsx. */
@@ -120,6 +122,8 @@ export interface ResolvedStyle {
     shimmer: number;
     glintRatio: number;
     glintIntensity: number;
+    selectedBrightness: number;
+    selectedSizeMultiplier: number;
   };
   camera: { ease: number };
   fade: { speed: number };
@@ -180,6 +184,9 @@ export function resolveStyle(style?: UnfoldStyle): ResolvedStyle {
       shimmer: edge?.shimmer ?? DEFAULT_EDGE.shimmer,
       glintRatio: edge?.glintRatio ?? DEFAULT_EDGE.glintRatio,
       glintIntensity: edge?.glintIntensity ?? DEFAULT_EDGE.glintIntensity,
+      selectedBrightness: edge?.selectedBrightness ?? DEFAULT_EDGE.selectedBrightness,
+      selectedSizeMultiplier:
+        edge?.selectedSizeMultiplier ?? DEFAULT_EDGE.selectedSizeMultiplier,
     },
     camera: { ease: style?.camera?.ease ?? DEFAULT_SCENE.cameraEase },
     fade: { speed: style?.fade?.speed ?? DEFAULT_SCENE.fadeSpeed },

@@ -1,6 +1,7 @@
 export { Unfold } from "./Unfold";
 export type {
   NodeId,
+  EdgeId,
   Vec3,
   UnfoldNode,
   UnfoldEdge,

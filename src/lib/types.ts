@@ -6,6 +6,7 @@
 // positions/colors are expressed as plain primitives (tuples, hex strings).
 
 export type NodeId = string;
+export type EdgeId = string;
 
 /** A position or direction in world space, as a plain tuple so the public API
  *  never leaks a THREE.Vector3 to consumers. */
@@ -103,6 +104,12 @@ export interface UnfoldStyle {
     glintRatio?: number;
     /** Glint brightness multiplier. Default 1. */
     glintIntensity?: number;
+    /** Alpha (brightness) multiplier applied to a selected edge's particles —
+     *  how much hotter the stream glows when selected. Default 2. */
+    selectedBrightness?: number;
+    /** Point-size multiplier applied to a selected edge's particles — how much
+     *  fatter/bolder the stream reads when selected. Default 1.7. */
+    selectedSizeMultiplier?: number;
     // The long tail of fine-tuning ParticleField uniforms (wind, palette weave,
     // node-bulge, burst gating, grain, the zoom-driven point-size/intensity
     // anchors, ~40 in total) is intentionally NOT exposed here: those were
@@ -145,6 +152,17 @@ export interface UnfoldProps {
   focusedNodeId?: NodeId | null;
   expandedNodeIds?: NodeId[];
   selectedNodeIds?: NodeId[];
+  selectedEdgeIds?: EdgeId[];
+
+  // --- Selection behavior ---
+  /** Whether clicking a node adds it to the selection. Default true. Focus
+   *  (camera-follow on node click) is a separate axis and always applies, even
+   *  when this is false. */
+  nodesSelectable?: boolean;
+  /** Whether clicking an edge adds it to the selection. Default true. When
+   *  false and neither onEdgeClick nor onEdgeHover is wired, edges aren't
+   *  pickable at all (the invisible hit-test tubes aren't rendered). */
+  edgesSelectable?: boolean;
 
   // --- Layout ---
   layout?: UnfoldLayout;
@@ -167,4 +185,5 @@ export interface UnfoldProps {
   onNodeExpand?: (node: UnfoldNode) => void;
   onFocusChange?: (nodeId: NodeId | null) => void;
   onSelectionChange?: (nodeIds: NodeId[]) => void;
+  onEdgeSelectionChange?: (edgeIds: EdgeId[]) => void;
 }

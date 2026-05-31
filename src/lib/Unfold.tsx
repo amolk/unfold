@@ -51,6 +51,9 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
     focusedNodeId,
     expandedNodeIds,
     selectedNodeIds,
+    selectedEdgeIds,
+    nodesSelectable = true,
+    edgesSelectable = true,
     onNodeClick,
     onNodeHover,
     onEdgeClick,
@@ -59,6 +62,7 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
     onNodeExpand,
     onFocusChange,
     onSelectionChange,
+    onEdgeSelectionChange,
     initialCamera,
     cameraMode = "3d",
   },
@@ -84,6 +88,13 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
     defaultValue: EMPTY_IDS,
     onChange: onSelectionChange
       ? (next) => onSelectionChange([...next])
+      : undefined,
+  });
+  const [resolvedSelectedEdges, setSelectedEdges] = useControllableState<readonly NodeId[]>({
+    value: selectedEdgeIds,
+    defaultValue: EMPTY_IDS,
+    onChange: onEdgeSelectionChange
+      ? (next) => onEdgeSelectionChange([...next])
       : undefined,
   });
   const [resolvedExpanded] = useControllableState<readonly NodeId[]>({
@@ -134,11 +145,17 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
       // MouseEvent at runtime, so the cast is safe and matches our public
       // signature (which committed to PointerEvent for consistency with the
       // node/edge events).
-      onPointerMissed={
-        onBackgroundClick
-          ? (e) => onBackgroundClick(e as PointerEvent)
-          : undefined
-      }
+      //
+      // Always wired now: a background click clears the whole selection (both
+      // kinds). Focus is intentionally left alone so the camera doesn't jump on
+      // a stray empty-space click. The guards keep an already-empty selection
+      // from firing a redundant onSelectionChange. The caller's
+      // onBackgroundClick still runs afterward if supplied.
+      onPointerMissed={(e) => {
+        if (resolvedSelected.length > 0) setSelected(EMPTY_IDS);
+        if (resolvedSelectedEdges.length > 0) setSelectedEdges(EMPTY_IDS);
+        onBackgroundClick?.(e as PointerEvent);
+      }}
     >
       <color attach="background" args={[bg]} />
       <fog attach="fog" args={[bg, 10, 40]} />
@@ -149,9 +166,13 @@ export const Unfold = forwardRef<UnfoldHandle, UnfoldProps>(function Unfold(
         layout={layout}
         focusedNodeId={resolvedFocus}
         selectedNodeIds={resolvedSelected}
+        selectedEdgeIds={resolvedSelectedEdges}
         expandedNodeIds={resolvedExpanded}
         onSetFocus={setFocus}
-        onSetSelected={setSelected}
+        onSetSelectedNodes={setSelected}
+        onSetSelectedEdges={setSelectedEdges}
+        nodesSelectable={nodesSelectable}
+        edgesSelectable={edgesSelectable}
         onNodeClick={onNodeClick}
         onNodeHover={onNodeHover}
         onEdgeClick={onEdgeClick}

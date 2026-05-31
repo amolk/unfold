@@ -16,6 +16,11 @@ uniform sampler2D uCurves;
 uniform sampler2D uEdgeColors;
 uniform sampler2D uEdgeFades;       // 1×uEdgeFadeTexHeight; R = per-edge fade (0..1)
 uniform float uEdgeFadeTexHeight;   // physical row count of uEdgeFades (fixed capacity)
+// Per-edge selection: 1×uCurveTexHeight (same row convention as uEdgeColors),
+// R = 1 on a selected edge, 0 otherwise. Selected edges brighten + enlarge.
+uniform sampler2D uEdgeSelected;
+uniform float uSelectedBrightness;  // alpha multiplier for a selected edge's particles
+uniform float uSelectedSizeMul;     // gl_PointSize multiplier for a selected edge's particles
 uniform float uCurveTexWidth;       // samples per curve
 uniform float uCurveTexHeight;      // number of curves (= active edge count, sized to fit)
 uniform float uPointSize;
@@ -318,6 +323,12 @@ void main() {
   float entryAlpha = pow(smoothstep(0.0, 1.0, life), 2.2);
   vAlpha *= mix(1.0, entryAlpha, entryRamp);
 
+  // Per-edge selection highlight: sampled by aCurveIndex (same row convention
+  // as uEdgeColors, so divide by uCurveTexHeight). Brightness is applied here
+  // to the alpha; the matching point-size boost is applied at gl_PointSize.
+  float edgeSelected = texture2D(uEdgeSelected, vec2(0.5, (aCurveIndex + 0.5) / uCurveTexHeight)).r;
+  vAlpha *= mix(1.0, uSelectedBrightness, edgeSelected);
+
   // Bursty emission: gate alpha by a 3D noise indexed on (streamId, life,
   // time). Peaks of the noise are "bursts" along the stream (bright clumps),
   // valleys are "gaps" (dark). All particles in the stream share the noise
@@ -502,6 +513,8 @@ void main() {
   // Glint particles get bigger so they read as defined pinpricks under bloom.
   float glintBoost = mix(1.0, uGlintSizeMult, vIsGlint);
   float baseSize = uPointSize * (10.0 / dist) * (1.0 + uNodeBulgeSize * prox) * glintBoost;
+  // Selected edges read bolder: scale up the sprite size for their particles.
+  baseSize *= mix(1.0, uSelectedSizeMul, edgeSelected);
 
   // --- motion-blur streak --------------------------------------------------
   // Project the world-space curve tangent into screen space; that direction

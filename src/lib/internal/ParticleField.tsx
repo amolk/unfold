@@ -32,6 +32,9 @@ interface ParticleFieldProps {
   /** 1×N RGBA float texture; R channel = per-edge fade in [0,1]. Mutated by
    *  the owner each frame; we just point a uniform at it. */
   edgeFadeTexture: THREE.DataTexture;
+  /** 1×N RGBA float texture; R channel = per-edge selected flag (0/1). Rebuilt
+   *  by the owner when the selection changes; we just point a uniform at it. */
+  edgeSelectedTexture: THREE.DataTexture;
   /** Per-node bulge data. Backing arrays are mutated by the owner each frame
    *  — we share the same references so the GPU sees the latest values. */
   nodeBulge: NodeBulgeData;
@@ -55,11 +58,14 @@ interface ParticleFieldProps {
   shimmer?: number;
   glintRatio?: number;
   glintIntensity?: number;
+  selectedBrightness?: number;
+  selectedSizeMultiplier?: number;
 }
 
 export function ParticleField({
   timeline,
   edgeFadeTexture,
+  edgeSelectedTexture,
   nodeBulge,
   stableColor,
   crisisColor,
@@ -75,6 +81,8 @@ export function ParticleField({
   shimmer = 0.1,
   glintRatio = 0.03,
   glintIntensity = 1,
+  selectedBrightness = 2,
+  selectedSizeMultiplier = 1.7,
 }: ParticleFieldProps) {
   const { size, camera } = useThree();
   const controls = useOrbitControls();
@@ -198,6 +206,13 @@ export function ParticleField({
     uniforms.uEdgeFadeTexHeight.value = edgeFadeTexture.image.height;
   }, [uniforms, edgeFadeTexture]);
 
+  // Point the per-edge selection sampler at the freshly built texture. Its row
+  // count matches the active edge count (= uCurveTexHeight), so the vertex
+  // shader reuses that uniform for the row coordinate — no separate height.
+  useEffect(() => {
+    uniforms.uEdgeSelected.value = edgeSelectedTexture;
+  }, [uniforms, edgeSelectedTexture]);
+
   // Theme colors arrive as props (the internal kind-based model until Phase 5).
   useEffect(() => {
     uniforms.uStableColor.value.set(stableColor);
@@ -218,6 +233,8 @@ export function ParticleField({
     uniforms.uShimmerSlowAmp.value = shimmer;
     uniforms.uGlintRatio.value = glintRatio;
     uniforms.uGlintIntensity.value = glintIntensity;
+    uniforms.uSelectedBrightness.value = selectedBrightness;
+    uniforms.uSelectedSizeMul.value = selectedSizeMultiplier;
   }, [
     uniforms,
     wispAmplitude,
@@ -229,6 +246,8 @@ export function ParticleField({
     shimmer,
     glintRatio,
     glintIntensity,
+    selectedBrightness,
+    selectedSizeMultiplier,
   ]);
 
   useEffect(() => {

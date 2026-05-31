@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { OrbitControls } from "@react-three/drei";
 import { ParticleField } from "./ParticleField";
 import { Nodes } from "./Nodes";
@@ -6,6 +6,7 @@ import { EdgePicker } from "./picking/edge-picker";
 import { Affordance } from "./picking/affordance";
 import { useTimelineEngine } from "./use-timeline-engine";
 import { usePickHandlers } from "./picking/usePickHandlers";
+import { toDataTexture } from "./particle-core";
 import type { ResolvedStyle, ResolvedTheme } from "./defaults";
 import type {
   NodeId,
@@ -30,14 +31,20 @@ interface SceneProps {
   focusedNodeId: NodeId | null;
   /** Set of selected node ids — rendered with the highlight rim. */
   selectedNodeIds: readonly NodeId[];
+  /** Set of selected edge ids — their particle streams brighten + enlarge. */
+  selectedEdgeIds: readonly NodeId[];
   /** Set of expanded node ids — Phase 8 reads this for affordance rendering. */
   expandedNodeIds: readonly NodeId[];
   /** Dual-mode setter for focus. In controlled mode the parent fires
    *  onFocusChange via the same setter; in uncontrolled mode it also
    *  updates the parent's internal state. Scene calls this from node click. */
   onSetFocus: (next: NodeId | null) => void;
-  /** Same shape, for selection. */
-  onSetSelected: (next: readonly NodeId[]) => void;
+  /** Same shape, for the node + edge halves of the unified selection. */
+  onSetSelectedNodes: (next: readonly NodeId[]) => void;
+  onSetSelectedEdges: (next: readonly NodeId[]) => void;
+  /** Gate click-driven selection per kind (focus-on-click is unaffected). */
+  nodesSelectable: boolean;
+  edgesSelectable: boolean;
   // --- Phase 6: pick events. Item-first arg order in the public callbacks
   // (the public UnfoldNode/Edge object first, then the PointerEvent). Scene
   // owns the index→public-object lookup so the picker components can stay
@@ -65,9 +72,13 @@ export function Scene({
   layout,
   focusedNodeId,
   selectedNodeIds,
+  selectedEdgeIds,
   expandedNodeIds,
   onSetFocus,
-  onSetSelected: _onSetSelected, // reserved for caller-driven selection in Phase 8+
+  onSetSelectedNodes,
+  onSetSelectedEdges,
+  nodesSelectable,
+  edgesSelectable,
   onNodeClick,
   onNodeHover,
   onEdgeClick,
@@ -111,6 +122,23 @@ export function Scene({
     return nodeIds.map((id) => sel.has(id));
   }, [nodeIds, selectedNodeIds]);
 
+  // Per-edge selection as a 1×(edge count) RGBA float texture (R = 0/1), in
+  // edgeIds order — which equals timeline.edges / aCurveIndex order (see
+  // scene-projection: timeline.edges[i].id === i, edgeIds[i] is its public id).
+  // The particle vertex shader samples it by aCurveIndex to brighten/enlarge a
+  // selected edge's stream. Rebuilt on selection or active-set change; disposed
+  // on replacement so the GPU texture doesn't leak.
+  const edgeSelectedTexture = useMemo(() => {
+    const sel = new Set(selectedEdgeIds);
+    const height = Math.max(1, edgeIds.length);
+    const data = new Float32Array(height * 4);
+    for (let i = 0; i < edgeIds.length; i++) {
+      if (sel.has(edgeIds[i])) data[i * 4] = 1;
+    }
+    return toDataTexture({ data, width: 1, height });
+  }, [edgeIds, selectedEdgeIds]);
+  useEffect(() => () => edgeSelectedTexture.dispose(), [edgeSelectedTexture]);
+
   // Phase 8: nodes that should display the expand-affordance ring —
   // `expandable === true` AND not in expandedNodeIds. Each entry carries the
   // render position (Vec3 tuple) and the timeline-index the resolver maps back
@@ -146,6 +174,12 @@ export function Scene({
     edgeIds,
     affordances,
     onSetFocus,
+    selectedNodeIds,
+    selectedEdgeIds,
+    onSetSelectedNodes,
+    onSetSelectedEdges,
+    nodesSelectable,
+    edgesSelectable,
     onNodeClick,
     onNodeHover,
     onEdgeClick,
@@ -158,6 +192,7 @@ export function Scene({
       <ParticleField
         timeline={timeline}
         edgeFadeTexture={edgeFade.texture}
+        edgeSelectedTexture={edgeSelectedTexture}
         nodeBulge={nodeBulge}
         stableColor={stableColor}
         crisisColor={crisisColor}
@@ -172,6 +207,8 @@ export function Scene({
         shimmer={style.edge.shimmer}
         glintRatio={style.edge.glintRatio}
         glintIntensity={style.edge.glintIntensity}
+        selectedBrightness={style.edge.selectedBrightness}
+        selectedSizeMultiplier={style.edge.selectedSizeMultiplier}
       />
       <Nodes
         timeline={timeline}

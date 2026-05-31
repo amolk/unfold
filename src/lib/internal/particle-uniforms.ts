@@ -97,6 +97,14 @@ export function createParticleUniforms(
     uGlintSizeMult: { value: 4 },
     uGlintIntensity: { value: 1 },
   };
+  // Per-edge selection highlight. uEdgeSelected is a 1×(edge count) texture
+  // (R = 0/1) sampled by aCurveIndex; selected edges get their particles
+  // brightened and enlarged. See ParticleField / particles.vert.
+  const selected = {
+    uEdgeSelected: { value: null as THREE.DataTexture | null },
+    uSelectedBrightness: { value: 2 },
+    uSelectedSizeMul: { value: 1.7 },
+  };
   const grain = {
     uGrainCore: { value: 80 },
     uGrainHalo: { value: 8.7 },
@@ -115,6 +123,7 @@ export function createParticleUniforms(
     shimmer,
     node,
     glint,
+    selected,
     grain,
   );
 }

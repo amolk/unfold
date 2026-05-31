@@ -24,6 +24,7 @@ const EXPECTED_KEYS = [
   "uSpeedScale", "uStableColor", "uStreakAmp", "uStreamPerturb", "uTailBloom",
   "uTime", "uTubeRadius", "uWindDir", "uWindSpeed", "uWindStrength", "uWispAmp",
   "uWispMorphSpeed", "uWispOctave", "uWispStretch",
+  "uEdgeSelected", "uSelectedBrightness", "uSelectedSizeMul",
 ].sort();
 
 const makeBulge = () => ({
@@ -58,6 +59,8 @@ describe("createParticleUniforms", () => {
     expect(u.uGrainCore.value).toBe(80);
     expect(u.uGrainHalo.value).toBe(8.7);
     expect(u.uNodeRadius.value).toBe(0.13);
+    expect(u.uSelectedBrightness.value).toBe(2);
+    expect(u.uSelectedSizeMul.value).toBe(1.7);
   });
 
   it("preserves vector/color defaults", () => {
